@@ -11,36 +11,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ログ通知①: Actions起動
-      - name: Notify Discord - Workflow Started
-        env:
-          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
-          FORUM_CHANNEL_ID: ${{ secrets.FORUM_CHANNEL_ID }}
-        run: |
-          python -c "
-          import os, requests
-          # 必要に応じて通知先のログ投稿処理を実行
-          print('🚀 ワークフローが起動しました')
-          "
-
-      # 1. AivisSpeech Engine (Docker) 起動
-      - name: Start AivisSpeech Engine
-        run: |
-          docker run -d -p 10101:10101 ghcr.io/aivis-project/aivis-speech-engine:latest
-          echo "Waiting for AivisSpeech Engine..."
-          for i in {1..30}; do
-            if curl -s http://localhost:10101/version > /dev/null; then
-              echo "AivisSpeech Engine is ready!"
-              break
-            fi
-            sleep 2
-          done
-
-      # ログ通知②: 音声AIコンテナ起動完了
-      - name: Notify Discord - Container Ready
-        run: |
-          echo "🔊 音声AIエンジン (AivisSpeech) の起動が完了しました"
-
+      # 1. Python 環境のセットアップ
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -51,7 +22,56 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 2. ネタ取得・従来通りのDiscord投稿 ＆ jsonデータ書き出し
+      # 2. ログ通知①: Actions起動
+      - name: Notify Discord - Workflow Started
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          FORUM_CHANNEL_ID: ${{ secrets.FORUM_CHANNEL_ID }}
+        run: |
+          python -c "
+          import os, requests
+          print('🚀 ワークフローが起動しました')
+          "
+
+      # 3. GHCR ログイン (AivisSpeech イメージ取得用の認証)
+      - name: Log in to GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 4. AivisSpeech Engine (Docker) 起動 & ヘルスチェック待機
+      - name: Start AivisSpeech Engine
+        run: |
+          # ディレクトリ作成と権限（uid=1000）の付与
+          mkdir -p ~/.local/share/AivisSpeech-Engine
+          sudo chown -R 1000:1000 ~/.local/share/AivisSpeech-Engine
+          
+          docker run -d -p 10101:10101 \
+            -v ~/.local/share/AivisSpeech-Engine:/home/user/.local/share/AivisSpeech-Engine-Dev \
+            ghcr.io/aivis-project/aivisspeech-engine:cpu-latest
+            
+          echo "Waiting for AivisSpeech Engine to become ready..."
+          for i in {1..60}; do
+            if curl -s http://127.0.0.1:10101/version > /dev/null; then
+              echo "✅ AivisSpeech Engine is fully initialized and ready!"
+              exit 0
+            fi
+            echo "Waiting... ($i/60)"
+            sleep 2
+          done
+          
+          echo "❌ Timed out waiting for AivisSpeech Engine."
+          docker logs $(docker ps -lq)
+          exit 1
+
+      # 5. ログ通知②: 音声AIコンテナ起動完了
+      - name: Notify Discord - Container Ready
+        run: |
+          echo "🔊 音声AIエンジン (AivisSpeech) の起動が完了しました"
+
+      # 6. ネタ取得・従来通りのDiscord投稿 ＆ jsonデータ書き出し
       - name: Run Fetch Trivia Script
         env:
           PYTHONUNBUFFERED: "1"
@@ -62,15 +82,15 @@ jobs:
         run: |
           python src/fetch_trivia.py
 
-      # 3. 音声 (.wav) ＆ 字幕 (.json / .srt) 生成
+      # 7. 音声 (.wav) ＆ 字幕 (.json / .srt) 生成
       - name: Run Voice & Subtitle Generation
         run: |
           python src/generate_voice.py \
             --input "output/trivia_result.json" \
-            --speaker "888282160" \
+            --speaker "888753760" \
             --output_dir "output"
 
-      # 4. 生成された音声ファイル (.wav) を Discord スレッドに返信投稿
+      # 8. 生成された音声ファイル (.wav) を Discord スレッドに返信投稿
       - name: Post Audio to Discord Thread
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
@@ -79,7 +99,7 @@ jobs:
             --input "output/trivia_result.json" \
             --audio "output/speech.wav"
 
-      # バックアップ用に Artifacts も保存
+      # 9. バックアップ用に Artifacts も保存
       - name: Upload Voice Artifacts
         uses: actions/upload-artifact@v4
         with:

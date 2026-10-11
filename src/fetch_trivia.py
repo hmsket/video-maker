@@ -48,7 +48,7 @@ def _env_list(name, default):
     return [x.strip() for x in os.environ.get(name, default).split(",") if x.strip()]
 
 
-GEMINI_MODELS = _env_list("GEMINI_MODELS", "gemini-3.8-flash,gemini-2.0-flash")
+GEMINI_MODELS = _env_list("GEMINI_MODELS", "gemini-3.8-flash, gemini-3.6-flash, gemini-3.5-flash-lite, gemini-3.5-flash")
 # Groq は廃止が早いので、起動時に list_groq_models() で確認するのがおすすめ
 GROQ_MODELS = _env_list("GROQ_MODELS", "openai/gpt-oss-120b,openai/gpt-oss-20b")
 CATEGORIES = _env_list(
@@ -60,13 +60,26 @@ HTTP_TIMEOUT_SEC = int(os.environ.get("HTTP_TIMEOUT_SEC", "60"))       # LLM 1�
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "output")
 MAX_ARTICLES = int(os.environ.get("MAX_ARTICLES", "4"))   # 記事を選び直す回数の上限
 MAX_ATTEMPTS = 3                                          # 1記事あたりの台本再生成の上限
-MAX_SOURCE_CHARS = 12000                                  # LLM に渡す原文の上限
+MAX_SOURCE_CHARS = int(os.environ.get("MAX_SOURCE_CHARS", "30000"))   # LLM に渡す原文の上限(長い記事は、原因が後ろにあることが多い)
 MIN_ARTICLE_CHARS = int(os.environ.get("MIN_ARTICLE_CHARS", "3000"))  # 短い記事は材料不足として捨てる
 MIN_QUOTE_CHARS = 15
 MAX_QUOTE_CHARS = 300
-MIN_SCRIPT_CHARS = 150                                    # 検証後の台本がこれより短ければ捨てる
-MIN_FACT_SENTENCES = 3
+MIN_SCRIPT_CHARS = 300                                    # 検証後の台本がこれより短ければ捨てる
+MIN_FACT_SENTENCES = 5
+MIN_TARGET_CHARS = int(os.environ.get("MIN_TARGET_CHARS", "300"))   # これ未満は再生成(最後は通す)
 PARTS = "起承転結"
+# 因果を表す日本語が、事実の文にあるのに、引用に因果の記述がなければ不合格にする
+CAUSAL_JA = re.compile(r"その結果|そのため|だから|したがって|このため|のせいで|が原因|が理由|というわけで")
+CAUSAL_EN = re.compile(r"\b(because|due to|as a result|resulted?|resulting|result in|caused?|causing|led to|leading to|"
+                       r"therefore|thus|consequently|owing to|reasons?|so that|since|hence|thanks to)\b", re.I)
+
+# 概説・一覧のような記事は、物語にしにくいので除外する(環境変数 EXCLUDE_TITLE_REGEX で変更可)
+EXCLUDE_TITLE_REGEX = os.environ.get(
+    "EXCLUDE_TITLE_REGEX",
+    r"^(History|Economy|Culture|Society|Religion|Geography|Demographics|Politics|Architecture|Art|Music|Science|Law|Economic history|Military history) of\b"
+    r"|^(Ancient|Medieval|Early modern|Modern) [a-z]+\b"
+    r"| in (the )?(ancient|medieval|early modern)\b|(period|era|age|ages)$|^Middle Ages$",
+)
 
 WIKI_API = "https://en.wikipedia.org/w/api.php"
 HEADERS = {"User-Agent": "VideoMakerBot/1.1 (https://github.com/hmsket/video-maker)"}
@@ -163,6 +176,8 @@ def check_article_suitable(article):
     title, text = article["title"], article["text"]
     if title.startswith(("List of", "Timeline of", "Outline of", "Index of")):
         return False, "一覧・年表系の記事"
+    if re.search(EXCLUDE_TITLE_REGEX, title, re.I):
+        return False, "概説系のタイトル(物語にしにくい)"
     if article.get("disambiguation"):
         return False, "曖昧さ回避ページ"
     if article.get("living"):
@@ -192,6 +207,7 @@ def fetch_article(title):
         "fullurl": p.get("fullurl") or f"https://en.wikipedia.org/wiki/{p['title'].replace(' ', '_')}",
         "revid": p.get("lastrevid"),
         "text": (p.get("extract") or "").strip()[:MAX_SOURCE_CHARS],
+        "truncated": len((p.get("extract") or "").strip()) > MAX_SOURCE_CHARS,
         "living": bool(p.get("categories")),
         "disambiguation": "disambiguation" in (p.get("pageprops") or {}),
     }
@@ -227,50 +243,87 @@ def pick_article():
 
 # ------------------------------------------------------------------ 2. 台本生成(Gemini)
 SCRIPT_PROMPT = """あなたは、歴史の雑学ショート動画の台本作家です。
-下の【原文】だけを材料に、YouTube Shorts 用のナレーション台本を書いてください。
+下の【原文】だけを材料に、YouTube Shorts 用(読み上げ約1分)のナレーション台本を書いてください。
+目標は「事実の羅列」ではなく、「最後まで聞きたくなる、ひとつの物語」です。
 
-【最重要ルール】
+【STEP 1: 物語の軸と、「問い」と「答え」を決める(最重要)】
+原文から、次のどれか「ひとつだけ」を軸に選びます。
+  ・ひとりの人物の運命  ・ひとつの出来事  ・ひとつの建物や物  ・ひとつの謎や疑問
+台本のすべての文は、この軸に関係していなければなりません。
+「他にもこんなことがあった」と別の話題に広げたり、同じ種類の事実を並べたりしてはいけません。
+原文が、概説・一覧・年表のようで、軸をひとつに絞れない場合は、台本を書かず narrative_ok を false にしてください。
+(無理に書いて、事実を寄せ集めた台本にするより、見送るほうが良いです。)
+
+次に、この軸の面白さを「問い」の形にして、その「答え」を、先に原文から探します。
+  ・答えが書かれた文を、原文から一字一句そのまま写して、plan.answer_quote に入れる。
+  ・「なぜ？」(原因・理由)と問うなら、その原因・理由が、原文にはっきり書かれていることを、必ず確認する。
+    書かれていなければ、「なぜ」とは問わず、「何が起きた？」「どれほど？」「誰が？」の形の問いにする。
+  ・答えが、原文のどこにも見つからないときは、narrative_ok を false にする。
+  ・answer_quote の内容は、「転」か「結」の fact の文として、台本に必ず入れる。
+    問いかけたのに、答えがない台本は、不合格です。
+
+【STEP 2: 起承転結で、つなげて書く】
+各文に part("起","承","転","結")を付け、4つすべてを使います。
+  起: 軸についての、謎や意外な事実で、視聴者が「どうして？」と思う疑問をひとつ立てる(答えが原文にあるものだけ)。
+  承: その疑問の背景(登場人物・場所・状況)を、時間の順に、具体的に語る(fact を複数文)。
+  転: 状況が変わる出来事・ピンチ・意外な事実を語る(fact を複数文)。「ところが」「しかし」「実は」などでつなぐ。
+  結: 疑問への答え(answer_quote の内容)と、結末を fact で語る。そのあと、感想、視聴者への問いかけで締める。
+      最初の問いかけに「戻る」形(回収)にすると、まとまりが出ます。
+・文と文は、前の文を受けて次の文が続くようにします。「そして」「その後」「ところが」「しかし」「実は」「さて」などの、つなぎ言葉を使ってよい。
+・因果の言葉(「その結果」「そのため」「だから」「このため」「〜のせいで」「〜が原因」)は、その文の引用が、因果を英語で述べている
+  (because, due to, as a result, led to, caused など)ときだけ使えます。それ以外では使わず、「そして」「その後」でつなぐ。
+・語り口は、視聴者に話しかけるように。短い文、具体的な名詞(人・物・場所)で、映像が浮かぶように書く。
+
+【STEP 3: 事実と感想の書き分け(ルール)】
 ・台本は「1文ずつ」に分け、各文に type を付けます。
-  - "fact" : 原文に書かれた事実を述べる文。必ず evidence_quote を付ける。
-  - "opinion": 問いかけ・感想・まとめの文。事実を新しく主張してはいけない(数字・固有名詞・年代を入れない)。
-    「〜かもしれません」「〜と思いませんか？」のようにぼかす。evidence_quote は null。
-・fact の evidence_quote は、【原文】から一字一句そのまま写した英語の連続した引用(15〜300文字)。
+  - "fact": 原文に書かれた事実を述べる文(全体で5文以上)。必ず evidence_quote を付ける。
+  - "opinion": 問いかけ・感想・まとめの文(全体で2〜3文)。evidence_quote は null。
+    ・新しい事実を主張してはいけません(数字・年代は入れない)。「〜かもしれません」「〜と思いませんか？」のようにぼかす。
+    ・fact の文に出てくる人物や物の名前を、問いかけに使うのは、かまいません。
+    ・感想は「直前の fact への素直な反応(例: それは驚きですよね。)」か「視聴者への問いかけ」の形にします。
+・fact の evidence_quote は、【原文】から一字一句そのまま写した、英語の連続した引用(15〜300文字)。
   要約・言い換え・「...」での省略・翻訳をしてはいけません。
 ・fact の text に入れてよい内容は、その引用が直接裏付けるものだけです。
   - 数字・人名・地名・年代は、引用にあるものだけを使う。アラビア数字で書く(例: 1567年, 14世紀)。
   - 単位の換算や、年の計算をしない。引用の数値をそのまま使う。
   - 人物の動機・感情・因果関係を、引用になければ書かない。
-・原文に書かれていないことは、一切足さない。材料が少なければ短くてかまいません(無理に伸ばさない)。
-・長さ: 原文に材料が十分あるときは、全体で400〜550文字(VOICEVOXで約1分)。fact は6文以上。
-  1文は60文字以内。小学生にも分かるやさしい言葉で。
-・構成は「起承転結」。各文に part("起","承","転","結" のどれか)を付け、4つすべてを使います。
-  - 起: 興味を引く問いかけ、または印象的な事実で始める。
-  - 承: 背景や状況を、fact で説明する。
-  - 転: 意外な展開・対比・ピンチ・状況の変化を、fact で述べる(原文にある出来事だけ)。
-  - 結: 結末の fact を述べたあと、感想や問いかけでまとめる。
-・opinion(感想・問いかけ)は全体で2〜4文。次のどちらかの形にします。
-  (a) 直前の fact への素直な反応(例:「それは驚きですよね。」)
-  (b) 視聴者への問いかけ(例:「あなたなら、どう思いますか？」)
-  新しい事実は入れません。台本を長くするための水増しにも使いません。
-・「異説がある」「伝承とされる」など、原文がぼかしている点は、台本でもそのままぼかす。
+・原文に書かれていないことは、一切足さない。「異説がある」「伝承とされる」など、原文がぼかしている点は、そのままぼかす。
+
+【長さ】
+・台本全体で350〜500文字。1文は60文字以内。小学生にも分かるやさしい言葉で。
+・長さが足りないときは、別の話題を足さず、「軸に沿った具体的な描写(誰が、どこで、何を、どうした)」を、原文から丁寧に拾って増やす。
+
+【構成の例(中身は真似しないこと。型だけの参考)】
+  起(opinion): 「〇〇は、なぜ△△だったのでしょう？」
+  承(fact): 「〇〇は、□□に生まれました。」「そして、□□で△△をしていました。」
+  転(fact): 「ところが、△△の年に、◇◇が起きます。」「実は、◇◇は〜でした。」
+  結(fact→opinion): 「こうして、〇〇は△△になりました。」「それは驚きですよね。あなたなら、どう思いますか？」
 
 {feedback}
 【記事タイトル】{title}
 【原文】
 {text}
 
-次の JSON だけを返してください:
-{{
+次の JSON だけを返してください(narrative_ok が false のときは、sentences は空でよい):
+{
+  "narrative_ok": true,
+  "reason_if_not": "false のときだけ、軸を絞れない理由",
+  "plan": {"axis": "物語の軸(1文)", "hook_question": "起で立てる疑問", "payoff": "結で回収する答え(日本語)",
+           "answer_quote": "答えが書かれた、原文からの英語の引用(一字一句そのまま)"},
   "title": "惹きつける日本語タイトル(20文字以内)",
   "summary": "原文の事実だけによる概要(120文字程度)",
   "sentences": [
-    {{"text": "日本語の1文", "part": "起", "type": "opinion", "evidence_quote": null}},
-    {{"text": "日本語の1文", "part": "承", "type": "fact", "evidence_quote": "原文からの英語の引用"}}
+    {"text": "日本語の1文", "part": "起", "type": "opinion", "evidence_quote": null},
+    {"text": "日本語の1文", "part": "承", "type": "fact", "evidence_quote": "原文からの英語の引用"}
   ],
   "image_prompts": ["英語の画像プロンプト4つ(歴史画風、文字なし、残酷な描写なし)"],
   "video_prompts": ["英語のカメラワーク指示4つ"]
-}}
+}
 """
+
+
+class NarrativeUnsuitable(Exception):
+    """記事が、物語の軸をひとつに絞れない(概説・一覧のような)ときの合図。"""
 
 
 def call_gemini_json(prompt):
@@ -294,7 +347,9 @@ def call_gemini_json(prompt):
         except Exception as e:
             last = e
             log(f"⚠️ {model}: {e}")
-            time.sleep(2)
+            # 429(無料枠の上限)のときは、少し待ってから次のモデルへ
+            wait = 5 if ("429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)) else 2
+            time.sleep(wait)
     raise RuntimeError(f"Gemini の呼び出しにすべて失敗しました: {last}")
 
 
@@ -308,6 +363,8 @@ def generate_draft(article, feedback=""):
               .replace("{title}", article["title"])
               .replace("{text}", article["text"]))
     d = call_gemini_json(prompt)
+    if d.get("narrative_ok") is False:
+        raise NarrativeUnsuitable(d.get("reason_if_not") or "軸を絞れない記事")
     sents = d.get("sentences")
     if not isinstance(sents, list) or not sents:
         raise ValueError("sentences がありません")
@@ -344,6 +401,9 @@ def mechanical_check(sentences, source):
                 missing = numbers(text) - numbers(q)
                 if missing:
                     bad[i] = f"数字 {sorted(missing)} が引用に含まれていない"
+                elif CAUSAL_JA.search(text) and not CAUSAL_EN.search(q):
+                    bad[i] = (f"因果を表す言葉「{CAUSAL_JA.search(text).group(0)}」があるが、引用に因果の記述がない"
+                              "(因果は、原文がそう述べているときだけ。なければ「そして」「その後」でつなぐ)")
         elif kind == "opinion":
             if numbers(text):
                 bad[i] = "感想・問いかけの文に数字が含まれている(事実は fact にする)"
@@ -360,7 +420,9 @@ SEM_SYSTEM = """あなたは、歴史コンテンツの厳格なファクトチ�
 - kind="fact": quote が text の内容を「すべて」裏付けているときだけ ok=true。
   quote にない情報(人物の動機・感情、因果関係、場所、人数、数字、「最初の」「唯一の」などの強い断定)が text に含まれていれば ok=false。
   「〜とされる」「〜と言われる」など、quote がぼかしている内容を、text が断定に変えていても ok=false。
-- kind="opinion": 新しい事実(出来事・数字・固有名詞・年代)を主張していなければ ok=true。主張していれば ok=false。
+- kind="opinion": 新しい事実(出来事・数字・年代)を主張していなければ ok=true。主張していれば ok=false。
+  他の fact の文に出てくる人物・物の名前を、問いかけや感想に使うのは問題ありません。
+  ただし、台本のどこにも出てこない事実を、前提にしていれば ok=false。
 
 次の JSON だけを返してください(説明文は不要):
 {"results": [{"i": 0, "ok": true, "reason": "短い理由"}]}
@@ -432,6 +494,29 @@ def build_feedback(sentences, problems):
     return "\n".join(f"・「{sentences[i].get('text', '')}」 → {why}" for i, why in sorted(problems.items()))
 
 
+def check_payoff(draft, source):
+    """最初の問いの「答え」が、台本の 転・結 の fact に入っているか。問題があれば理由を返す(OKなら None)。"""
+    plan = draft.get("plan") or {}
+    aq = norm(plan.get("answer_quote") or "")
+    if len(aq) < MIN_QUOTE_CHARS:
+        return "plan.answer_quote(問いの答えが書かれた、原文からの引用)がありません"
+    if aq not in norm(source):
+        return "plan.answer_quote が、原文に見つかりません(一字一句そのまま写すこと)"
+    parts, sents = [], draft["sentences"]
+    for i, s in enumerate(sents):
+        q = norm(s.get("evidence_quote") or "")
+        if s.get("type") == "fact" and q and (aq in q or q in aq):
+            part = s.get("part")
+            if part not in tuple(PARTS):              # part が付いていなければ、台本の後半かどうかで判定
+                part = "転" if i >= len(sents) / 2 else "承"
+            parts.append(part)
+    if any(p in ("転", "結") for p in parts):        # 1つでも、転・結にあればOK
+        return None
+    if parts:
+        return "問いの答えの文が、起・承にあります。転か結で語ってください"
+    return "問いの答えとなる事実(answer_quote)が、台本の fact の文で使われていません"
+
+
 def missing_parts(sentences):
     """起承転結のうち、台本に出てこない part を返す。"""
     present = {s.get("part") for s in sentences}
@@ -454,6 +539,9 @@ def generate_verified(article):
         log(f"✍️ 台本作成 {attempt}/{MAX_ATTEMPTS}")
         try:
             draft = generate_draft(article, feedback)
+        except NarrativeUnsuitable as e:
+            log(f"↪ 物語の軸を絞れない記事のため、見送ります: {e}")
+            return None
         except Exception as e:
             log(f"⚠️ 台本生成に失敗: {e}")
             continue
@@ -467,10 +555,25 @@ def generate_verified(article):
         if not problems:
             draft["status"] = "verified" if sem_available else "mechanical_only"
             miss = missing_parts(sents)
-            if miss and attempt < MAX_ATTEMPTS:        # 構成の不足は、事実の誤りではないので、再生成のみ
-                log(f"   ↪ 起承転結のうち {''.join(miss)} がないため、再生成します")
-                feedback = (f"・起承転結のうち「{'・'.join(miss)}」の part の文がありません。"
-                            "4つすべてを使い、事実の文は原文の引用で裏付けたまま、構成を直してください。")
+            total = len(script_text(sents))
+            soft = []
+            if miss:
+                soft.append(f"・起承転結のうち「{'・'.join(miss)}」の part の文がありません。4つすべてを使ってください。")
+            if total < MIN_TARGET_CHARS:
+                soft.append(f"・台本が短すぎます({total}字)。別の話題は足さず、軸に沿った具体的な描写を、原文から丁寧に拾って、"
+                            f"{MIN_TARGET_CHARS}字以上にしてください(事実は、引用で裏付けたまま)。")
+            pay = check_payoff(draft, article["text"])
+            if pay:
+                hook = (draft.get("plan") or {}).get("hook_question", "")
+                soft.append(f"・最初の問い「{hook}」の答えが、台本にありません({pay})。原文から、答えが書かれた箇所を探して "
+                            "plan.answer_quote に入れ、その内容を、転か結の fact の文にしてください。"
+                            "原文に答えがなければ、問いを「何が起きたか」などに変えるか、narrative_ok を false にしてください。")
+            if pay and attempt >= MAX_ATTEMPTS:
+                log(f"✖ 問いに対する答えが入った台本を作れなかったため、この記事は見送ります: {pay}")
+                return None
+            if soft and attempt < MAX_ATTEMPTS:        # 構成・長さの不足は、事実の誤りではないので、再生成のみ
+                log(f"   ↪ 構成/長さを直すため、再生成します(起承転結の不足: {''.join(miss) or 'なし'} / {total}字)")
+                feedback = "\n".join(soft)
                 continue
             draft["missing_parts"] = miss
             return draft
@@ -488,6 +591,10 @@ def generate_verified(article):
         log("✖ 問題のある文を除くと、台本として成立しないため、この記事は見送ります。")
         return None
     draft["sentences"] = kept
+    pay = check_payoff(draft, article["text"])
+    if pay:
+        log(f"✖ 問題のある文を除いたら、問いの答えがなくなったため、この記事は見送ります: {pay}")
+        return None
     draft["status"] = "partial" if sem_available else "partial_mechanical_only"
     draft["dropped_count"] = len(problems)
     return draft
@@ -529,6 +636,11 @@ def build_messages(article, data):
             f"・検証状態: {STATUS_LABEL.get(data['status'], data['status'])}")
     if data.get("dropped_count"):
         main += f"\n・削除した文: {data['dropped_count']}文"
+    plan = data.get("plan") or {}
+    if plan.get("axis"):
+        main += f"\n・物語の軸: {plan['axis']}\n・問い→答え: {plan.get('hook_question', '')} → {plan.get('payoff', '')}"
+        if plan.get("answer_quote"):
+            main += f"\n・答えの根拠: \"{plan['answer_quote'][:200]}\""
     text = script_text(sents)
     n_op = sum(1 for s in sents if s.get("type") == "opinion")
     main += f"\n・長さ: {len(text)}字(読み上げ 約{estimate_seconds(text)}秒の目安) / 感想・問いかけ {n_op}文"
@@ -565,6 +677,7 @@ def save_trivia_json(article, data, thread_id=None):
         "image_prompts": data.get("image_prompts", []),
         "video_prompts": data.get("video_prompts", []),
         "status": data.get("status"),
+        "plan": data.get("plan"),
         "article": {"title": article["title"], "url": article.get("fullurl"),
                     "revid": article.get("revid"), "license": "CC BY-SA 4.0"},
         "article_url": article.get("fullurl"),
@@ -632,7 +745,8 @@ def main():
         if not article:
             log("❌ 条件に合う記事が見つかりませんでした。")
             continue
-        log(f"📖 {article['title']}  {article['fullurl']}  ({len(article['text'])}字)")
+        log(f"📖 {article['title']}  {article['fullurl']}  ({len(article['text'])}字"
+            f"{'、長いため先頭のみ使用' if article.get('truncated') else ''})")
         data = generate_verified(article)
         if data:
             save_trivia_json(article, data, None)       # 投稿前にも保存(thread_id は後で追記)
