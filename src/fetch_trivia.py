@@ -7,6 +7,7 @@
   4. Groq の意味チェック: 引用が、その文の内容を本当に裏付けているか
   5. 問題があれば、指摘つきで再生成。それでも残る文は削除
   6. 人が確認しやすいように、根拠一覧つきで Discord に投稿
+  7. 後続の音声合成用に output/trivia_result.json を出力(投稿前に保存→投稿後にスレッドIDを追記)
 
 必要な環境変数: DISCORD_TOKEN, FORUM_CHANNEL_ID, GEMINI_API_KEY, GROQ_API_KEY(任意)
 任意: GEMINI_MODELS, GROQ_MODELS, WIKI_CATEGORIES(カンマ区切り), MAX_ARTICLES
@@ -15,6 +16,7 @@ import json
 import os
 import random
 import re
+import sys
 import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
@@ -55,6 +57,7 @@ CATEGORIES = _env_list(
 )
 MAX_RUNTIME_SEC = int(os.environ.get("MAX_RUNTIME_SEC", "600"))        # 全体の制限時間
 HTTP_TIMEOUT_SEC = int(os.environ.get("HTTP_TIMEOUT_SEC", "60"))       # LLM 1回の待ち時間の上限
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "output")
 MAX_ARTICLES = int(os.environ.get("MAX_ARTICLES", "4"))   # 記事を選び直す回数の上限
 MAX_ATTEMPTS = 3                                          # 1記事あたりの台本再生成の上限
 MAX_SOURCE_CHARS = 12000                                  # LLM に渡す原文の上限
@@ -548,10 +551,39 @@ def build_messages(article, data):
     return main, evidence, prompts
 
 
+def save_trivia_json(article, data, thread_id=None):
+    """後続の音声合成・動画合成のため、台本などを JSON で保存する。
+    投稿前に thread_id=None で保存し、投稿後に thread_id を入れて上書きする。"""
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    sents = data["sentences"]
+    out = {
+        "thread_id": str(thread_id) if thread_id else None,   # 桁が大きいので文字列で持つ
+        "title": data.get("title", article["title"]),
+        "summary": data.get("summary", ""),
+        "script_text": script_text(sents),
+        "sentences": sents,
+        "image_prompts": data.get("image_prompts", []),
+        "video_prompts": data.get("video_prompts", []),
+        "status": data.get("status"),
+        "article": {"title": article["title"], "url": article.get("fullurl"),
+                    "revid": article.get("revid"), "license": "CC BY-SA 4.0"},
+        "article_url": article.get("fullurl"),
+    }
+    path = os.path.join(OUTPUT_DIR, "trivia_result.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+    log(f"💾 JSON を保存しました: {path} (thread_id={out['thread_id']})")
+    return path
+
+
 def post_to_discord(article, data):
+    """Discord に投稿する。成功したら True。"""
     import discord
 
-    main, evidence, prompts = build_messages(article, data)
+    main_msg, evidence, prompts = build_messages(article, data)
+    result = {"ok": False}
 
     class Poster(discord.Client):
         async def on_ready(self):
@@ -561,11 +593,14 @@ def post_to_discord(article, data):
                 if not isinstance(ch, discord.ForumChannel):
                     log("❌ フォーラムチャンネルが見つかりませんでした。")
                 else:
-                    t = await ch.create_thread(name=f"📜 {data['title']}"[:100], content=main)
+                    t = await ch.create_thread(name=f"📜 {data['title']}"[:100], content=main_msg)
+                    thread = t.thread
+                    save_trivia_json(article, data, thread.id)     # まず thread_id を保存(以降の投稿が失敗しても残す)
                     for c in evidence:
-                        await t.thread.send(content=c)
-                    await t.thread.send(content=prompts)
-                    log(f"🎉 投稿完了: {t.thread.name}")
+                        await thread.send(content=c)
+                    await thread.send(content=prompts)
+                    log(f"🎉 投稿完了: {thread.name} (Thread ID: {thread.id})")
+                    result["ok"] = True
             except Exception as e:
                 log(f"❌ Discord 投稿エラー: {e}")
             finally:
@@ -574,12 +609,18 @@ def post_to_discord(article, data):
     intents = discord.Intents.default()
     intents.guilds = True
     Poster(intents=intents).run(DISCORD_TOKEN)
+    return result["ok"]
 
 
 # ------------------------------------------------------------------ main
 def main():
+    """成功なら 0、投稿できなかったら 1 で終了する(Actions の後続ステップを止めるため)。"""
     if not GEMINI_API_KEY:
-        raise SystemExit("❌ GEMINI_API_KEY が未設定です。")
+        log("❌ GEMINI_API_KEY が未設定です。")
+        return 1
+    if not DISCORD_TOKEN or not FORUM_CHANNEL_ID:
+        log("❌ DISCORD_TOKEN / FORUM_CHANNEL_ID が未設定です。")
+        return 1
     if not GROQ_API_KEY:
         log("⚠️ GROQ_API_KEY が未設定です。AI意味チェックなし(機械照合のみ)で進めます。")
 
@@ -594,12 +635,16 @@ def main():
         log(f"📖 {article['title']}  {article['fullurl']}  ({len(article['text'])}字)")
         data = generate_verified(article)
         if data:
+            save_trivia_json(article, data, None)       # 投稿前にも保存(thread_id は後で追記)
             log("🚀 Discord へ投稿します...")
-            post_to_discord(article, data)
-            return
+            if post_to_discord(article, data):
+                return 0
+            log("❌ Discord への投稿に失敗しました。")
+            return 1
         log("↪ 別の記事で、やり直します。")
     log("❌ 検証を通る台本を作れなかったため、今回は投稿しません。")
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

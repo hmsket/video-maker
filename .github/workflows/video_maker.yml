@@ -1,0 +1,87 @@
+name: Make Video
+
+on:
+  workflow_dispatch: # Discordボタン / Cloudflare からの起動
+
+jobs:
+  fetch-and-post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ログ通知①: Actions起動
+      - name: Notify Discord - Workflow Started
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          FORUM_CHANNEL_ID: ${{ secrets.FORUM_CHANNEL_ID }}
+        run: |
+          python -c "
+          import os, requests
+          # 必要に応じて通知先のログ投稿処理を実行
+          print('🚀 ワークフローが起動しました')
+          "
+
+      # 1. AivisSpeech Engine (Docker) 起動
+      - name: Start AivisSpeech Engine
+        run: |
+          docker run -d -p 10101:10101 ghcr.io/aivis-project/aivis-speech-engine:latest
+          echo "Waiting for AivisSpeech Engine..."
+          for i in {1..30}; do
+            if curl -s http://localhost:10101/version > /dev/null; then
+              echo "AivisSpeech Engine is ready!"
+              break
+            fi
+            sleep 2
+          done
+
+      # ログ通知②: 音声AIコンテナ起動完了
+      - name: Notify Discord - Container Ready
+        run: |
+          echo "🔊 音声AIエンジン (AivisSpeech) の起動が完了しました"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 2. ネタ取得・従来通りのDiscord投稿 ＆ jsonデータ書き出し
+      - name: Run Fetch Trivia Script
+        env:
+          PYTHONUNBUFFERED: "1"
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          FORUM_CHANNEL_ID: ${{ secrets.FORUM_CHANNEL_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          python src/fetch_trivia.py
+
+      # 3. 音声 (.wav) ＆ 字幕 (.json / .srt) 生成
+      - name: Run Voice & Subtitle Generation
+        run: |
+          python src/generate_voice.py \
+            --input "output/trivia_result.json" \
+            --speaker "888282160" \
+            --output_dir "output"
+
+      # 4. 生成された音声ファイル (.wav) を Discord スレッドに返信投稿
+      - name: Post Audio to Discord Thread
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+        run: |
+          python src/post_audio_to_discord.py \
+            --input "output/trivia_result.json" \
+            --audio "output/speech.wav"
+
+      # バックアップ用に Artifacts も保存
+      - name: Upload Voice Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-and-subtitles
+          path: output/
