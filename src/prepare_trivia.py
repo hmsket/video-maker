@@ -18,7 +18,7 @@ def prepare_trivia():
     # Discord Thread ID が渡されている場合、スレッドメッセージから確定台本を取得
     if thread_id and token:
         print(f"🔍 Discord Thread ({thread_id}) から確定台本を取得中...")
-        url = f"[https://discord.com/api/v10/channels/](https://discord.com/api/v10/channels/){thread_id}/messages?limit=15"
+        url = f"https://discord.com/api/v10/channels/{thread_id}/messages?limit=15"
         try:
             res = requests.get(url, headers={"Authorization": f"Bot {token}"})
             if res.ok:
