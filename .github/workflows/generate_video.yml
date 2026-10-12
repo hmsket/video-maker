@@ -30,7 +30,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests pydub google-genai
 
-      # 3. GHCR ログイン (AivisSpeech イメージ取得用の認証)
+      # 2. GHCR ログイン (AivisSpeech イメージ取得用の認証)
       - name: Log in to GitHub Container Registry (GHCR)
         uses: docker/login-action@v3
         with:
@@ -38,7 +38,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 💡 Docker キャッシュの復元 / 保存
+      # 3. Docker キャッシュの復元 / 保存
       - name: Cache Docker Images
         uses: actions/cache@v4
         with:
@@ -47,7 +47,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-docker-aivis-
 
-      # 💡 キャッシュが存在すればロード、無ければ普通に Pull して保存
+      # 4. キャッシュが存在すればロード
       - name: Load cached Docker image
         run: |
           if [ -f /tmp/docker-cache/aivisspeech.tar ]; then
@@ -55,10 +55,9 @@ jobs:
             docker load < /tmp/docker-cache/aivisspeech.tar
           fi
 
-      # 4. AivisSpeech Engine (Docker) 起動 & ヘルスチェック待機
+      # 5. AivisSpeech Engine (Docker) 起動 & ヘルスチェック待機
       - name: Start AivisSpeech Engine
         run: |
-          # ディレクトリ作成と権限（uid=1000）の付与
           mkdir -p ~/.local/share/AivisSpeech-Engine
           sudo chown -R 1000:1000 ~/.local/share/AivisSpeech-Engine
           
@@ -66,6 +65,13 @@ jobs:
             -v ~/.local/share/AivisSpeech-Engine:/home/user/.local/share/AivisSpeech-Engine-Dev \
             ghcr.io/aivis-project/aivisspeech-engine:cpu-latest
           
+          # 初回実行時のみ次回用にキャッシュを保存
+          if [ ! -f /tmp/docker-cache/aivisspeech.tar ]; then
+            mkdir -p /tmp/docker-cache
+            echo "💾 次回用に Docker イメージをキャッシュ保存中..."
+            docker save ghcr.io/aivis-project/aivisspeech-engine:cpu-latest > /tmp/docker-cache/aivisspeech.tar
+          fi
+
           echo "Waiting for AivisSpeech Engine to become ready..."
           for i in {1..60}; do
             if curl -s http://127.0.0.1:10101/version > /dev/null; then
@@ -80,74 +86,29 @@ jobs:
           docker logs $(docker ps -lq)
           exit 1
 
-      # 5. 音声 (.wav) ＆ 字幕 (.srt) 生成
+      # 6. 台本データの準備（Discord取得 or テスト生成）＆ 音声生成
       - name: Run Voice & Subtitle Generation
         env:
           AIVIS_URL: "http://127.0.0.1:10101"
           THREAD_ID: ${{ github.event.inputs.thread_id }}
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
         run: |
-          # output ディレクトリを作成
-          mkdir -p output
+          python src/prepare_trivia.py
+          python src/generate_audio.py
 
-          # もし trivia_result.json が存在しない場合、Discord スレッドから取得するかテスト用データを作成する
-          python -c "
-          import os, json, requests
-
-          thread_id = os.environ.get('THREAD_ID')
-          token = os.environ.get('DISCORD_TOKEN')
-          json_path = 'output/trivia_result.json'
-
-          if not os.path.exists(json_path):
-              script_text = ''
-              if thread_id and token:
-                  print(f'🔍 Discord Thread ({thread_id}) から台本を取得中...')
-                  url = f'https://discord.com/api/v10/channels/{thread_id}/messages?limit=10'
-                  res = requests.get(url, headers={'Authorization': f'Bot {token}'})
-                  if res.ok:
-                      messages = res.json()
-                      for m in messages:
-                          content = m.get('content', '')
-                          if '```' in content:
-                              import re
-                              match = re.search(r'```(?:\w+)?\n?([\s\S]*?)```', content)
-                              if match:
-                                  script_text = match.group(1).strip()
-                                  break
-              
-              if not script_text:
-                  script_text = 'これはテスト用の歴史雑学台本です。正常に音声が生成されるか確認しています。'
-
-              data = {
-                  'script_text': script_text,
-                  'image_prompts': [
-                      'A cinematic historical reenactment scene, 8k, vertical 9:16',
-                      'An ancient castle with atmospheric lighting, 8k, vertical 9:16',
-                      'A dramatic historical moment, 8k, vertical 9:16'
-                  ],
-                  'video_prompts': ['Slow zoom in', 'Pan left', 'Static shot']
-              }
-              with open(json_path, 'w', encoding='utf-8') as f:
-                  json.dump(data, f, ensure_ascii=False, indent=2)
-              print('✅ output/trivia_result.json を準備しました')
-          "
-
-          # 音声生成スクリプトを実行
-          python scripts/generate_audio.py
-      
-      # 6. 背景画像生成 (Imagen 3)
+      # 7. 背景画像生成 (Imagen 3)
       - name: Generate Images with Imagen 3
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python src/generate_images.py
 
-      # 7. FFmpeg による仮組み動画生成
+      # 8. FFmpeg による仮組み動画生成
       - name: Build Draft Video
         run: |
-          python src/generate_video.py
+          python src/build_draft_video.py
 
-      # 8. 成果物を Zip にまとめて Artifacts へ保存
+      # 9. 成果物を Zip にまとめて Artifacts へ保存
       - name: Create Zip Artifact
         run: |
           cd output
