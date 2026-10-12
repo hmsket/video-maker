@@ -38,6 +38,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 💡 Docker キャッシュの復元 / 保存
+      - name: Cache Docker Images
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-cache
+          key: ${{ runner.os }}-docker-aivis-${{ hashFiles('**/generate_video.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-docker-aivis-
+
+      # 💡 キャッシュが存在すればロード、無ければ普通に Pull して保存
+      - name: Load cached Docker image
+        run: |
+          if [ -f /tmp/docker-cache/aivisspeech.tar ]; then
+            echo "📦 キャッシュから Docker イメージをロード中..."
+            docker load < /tmp/docker-cache/aivisspeech.tar
+          fi
+
       # 4. AivisSpeech Engine (Docker) 起動 & ヘルスチェック待機
       - name: Start AivisSpeech Engine
         run: |
@@ -69,19 +86,19 @@ jobs:
           AIVIS_URL: "http://127.0.0.1:10101"
           THREAD_ID: ${{ github.event.inputs.thread_id }}
         run: |
-          python scripts/generate_audio.py
+          python src/generate_voice.py
 
       # 6. 背景画像生成 (Imagen 3)
       - name: Generate Images with Imagen 3
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          python scripts/generate_images.py
+          python src/generate_images.py
 
       # 7. FFmpeg による仮組み動画生成
       - name: Build Draft Video
         run: |
-          python scripts/build_draft_video.py
+          python src/generate_video.py
 
       # 8. 成果物を Zip にまとめて Artifacts へ保存
       - name: Create Zip Artifact
