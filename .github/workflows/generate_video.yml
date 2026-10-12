@@ -1,9 +1,14 @@
 name: Generate Video Pipeline
 
 on:
+  workflow_dispatch:
+    inputs:
+      thread_id:
+        description: 'Discord Thread ID'
+        required: false
+        default: ''
   repository_dispatch:
     types: [generate_video]
-  workflow_dispatch:
 
 jobs:
   build-media:
@@ -30,6 +35,7 @@ jobs:
       - name: Generate Audio & SRT
         env:
           AIVIS_URL: "http://localhost:10101"
+          THREAD_ID: ${{ github.event.inputs.thread_id }}
         run: python scripts/generate_audio.py
 
       - name: Generate Images with Imagen 3
