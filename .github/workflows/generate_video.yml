@@ -1,0 +1,52 @@
+name: Generate Video Pipeline
+
+on:
+  repository_dispatch:
+    types: [generate_video]
+  workflow_dispatch:
+
+jobs:
+  build-media:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install requests pydub google-genai
+
+      - name: Launch AivisSpeech Engine (Docker)
+        run: |
+          docker run -d -p 10101:10101 aivis/aivis-speech-engine:latest
+          sleep 10  # 起動待機
+
+      - name: Generate Audio & SRT
+        env:
+          AIVIS_URL: "http://localhost:10101"
+        run: python scripts/generate_audio.py
+
+      - name: Generate Images with Imagen 3
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python scripts/generate_images.py
+
+      - name: Build Draft Video
+        run: python scripts/build_draft_video.py
+
+      - name: Create Zip Artifact
+        run: |
+          cd output
+          zip -r ../video_assets.zip ./*
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-draft-assets
+          path: video_assets.zip
