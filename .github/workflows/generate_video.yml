@@ -85,9 +85,56 @@ jobs:
         env:
           AIVIS_URL: "http://127.0.0.1:10101"
           THREAD_ID: ${{ github.event.inputs.thread_id }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
         run: |
-          python src/generate_voice.py
+          # output ディレクトリを作成
+          mkdir -p output
 
+          # もし trivia_result.json が存在しない場合、Discord スレッドから取得するかテスト用データを作成する
+          python -c "
+          import os, json, requests
+
+          thread_id = os.environ.get('THREAD_ID')
+          token = os.environ.get('DISCORD_TOKEN')
+          json_path = 'output/trivia_result.json'
+
+          if not os.path.exists(json_path):
+              script_text = ''
+              if thread_id and token:
+                  print(f'🔍 Discord Thread ({thread_id}) から台本を取得中...')
+                  url = f'https://discord.com/api/v10/channels/{thread_id}/messages?limit=10'
+                  res = requests.get(url, headers={'Authorization': f'Bot {token}'})
+                  if res.ok:
+                      messages = res.json()
+                      for m in messages:
+                          content = m.get('content', '')
+                          if '```' in content:
+                              import re
+                              match = re.search(r'```(?:\w+)?\n?([\s\S]*?)```', content)
+                              if match:
+                                  script_text = match.group(1).strip()
+                                  break
+              
+              if not script_text:
+                  script_text = 'これはテスト用の歴史雑学台本です。正常に音声が生成されるか確認しています。'
+
+              data = {
+                  'script_text': script_text,
+                  'image_prompts': [
+                      'A cinematic historical reenactment scene, 8k, vertical 9:16',
+                      'An ancient castle with atmospheric lighting, 8k, vertical 9:16',
+                      'A dramatic historical moment, 8k, vertical 9:16'
+                  ],
+                  'video_prompts': ['Slow zoom in', 'Pan left', 'Static shot']
+              }
+              with open(json_path, 'w', encoding='utf-8') as f:
+                  json.dump(data, f, ensure_ascii=False, indent=2)
+              print('✅ output/trivia_result.json を準備しました')
+          "
+
+          # 音声生成スクリプトを実行
+          python scripts/generate_audio.py
+      
       # 6. 背景画像生成 (Imagen 3)
       - name: Generate Images with Imagen 3
         env:
