@@ -94,7 +94,7 @@ jobs:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
         run: |
           python src/prepare_trivia.py
-          python src/generate_audio.py
+          python src/generate_voice.py
 
       # 7. 背景画像生成 (Imagen 3)
       - name: Generate Images with Imagen 3
