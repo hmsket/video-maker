@@ -11,22 +11,18 @@ def generate_scene_images(image_prompts, output_dir="output"):
 
     os.makedirs(output_dir, exist_ok=True)
     
-    # Imagen 3 (Developer API エンドポイント)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key={api_key}"
+    # 💡 Developer API 用の正しい Imagen 3 エンドポイント
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:generateImages?key={api_key}"
 
     for idx, prompt in enumerate(image_prompts[:3], start=1):
         print(f"🎨 Scene {idx} 画像生成中: {prompt[:40]}...")
         
         payload = {
-            "instances": [
-                {"prompt": f"{prompt}, 8k resolution, cinematic lighting, vertical 9:16 aspect ratio"}
-            ],
-            "parameters": {
-                "sampleCount": 1,
+            "prompt": f"{prompt}, 8k resolution, cinematic lighting, vertical 9:16 aspect ratio",
+            "config": {
+                "numberOfImages": 1,
                 "aspectRatio": "9:16",
-                "outputOptions": {
-                    "mimeType": "image/jpeg"
-                }
+                "outputMimeType": "image/jpeg"
             }
         }
 
@@ -37,13 +33,15 @@ def generate_scene_images(image_prompts, output_dir="output"):
                 continue
 
             data = res.json()
-            predictions = data.get("predictions", [])
-            if predictions and "bytesBase64Encoded" in predictions[0]:
-                img_bytes = base64.b64decode(predictions[0]["bytesBase64Encoded"])
-                image_path = os.path.join(output_dir, f"scene_{idx:02d}.jpg")
-                with open(image_path, "wb") as f:
-                    f.write(img_bytes)
-                print(f"  └ 保存完了: {image_path}")
+            generated_images = data.get("generatedImages", [])
+            if generated_images and "image" in generated_images[0]:
+                img_bytes_b64 = generated_images[0]["image"].get("imageBytes")
+                if img_bytes_b64:
+                    img_bytes = base64.b64decode(img_bytes_b64)
+                    image_path = os.path.join(output_dir, f"scene_{idx:02d}.jpg")
+                    with open(image_path, "wb") as f:
+                        f.write(img_bytes)
+                    print(f"  └ 保存完了: {image_path}")
             else:
                 print(f"  ⚠️ Scene {idx} 応答データ構造が不正です: {data}")
 
