@@ -30,7 +30,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests pydub google-genai
 
-      # 2. GHCR ログイン (AivisSpeech イメージ取得用の認証)
+      # 3. GHCR ログイン (AivisSpeech イメージ取得用の認証)
       - name: Log in to GitHub Container Registry (GHCR)
         uses: docker/login-action@v3
         with:
@@ -38,7 +38,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 3. AivisSpeech Engine (Docker) 起動 & ヘルスチェック待機
+      # 4. AivisSpeech Engine (Docker) 起動 & ヘルスチェック待機
       - name: Start AivisSpeech Engine
         run: |
           # ディレクトリ作成と権限（uid=1000）の付与
@@ -63,7 +63,7 @@ jobs:
           docker logs $(docker ps -lq)
           exit 1
 
-      # 4. 音声 (.wav) ＆ 字幕 (.srt) 生成
+      # 5. 音声 (.wav) ＆ 字幕 (.srt) 生成
       - name: Run Voice & Subtitle Generation
         env:
           AIVIS_URL: "http://127.0.0.1:10101"
@@ -71,19 +71,19 @@ jobs:
         run: |
           python scripts/generate_audio.py
 
-      # 5. 背景画像生成 (Imagen 3)
+      # 6. 背景画像生成 (Imagen 3)
       - name: Generate Images with Imagen 3
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python scripts/generate_images.py
 
-      # 6. FFmpeg による仮組み動画生成
+      # 7. FFmpeg による仮組み動画生成
       - name: Build Draft Video
         run: |
           python scripts/build_draft_video.py
 
-      # 7. 成果物を Zip にまとめて Artifacts へ保存
+      # 8. 成果物を Zip にまとめて Artifacts へ保存
       - name: Create Zip Artifact
         run: |
           cd output
