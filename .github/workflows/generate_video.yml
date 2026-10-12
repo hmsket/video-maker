@@ -101,12 +101,12 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          python src/generate_images.py
+          python src/generate_image.py
 
       # 8. FFmpeg による仮組み動画生成
       - name: Build Draft Video
         run: |
-          python src/build_draft_video.py
+          python src/generate_video.py
 
       # 9. 成果物を Zip にまとめて Artifacts へ保存
       - name: Create Zip Artifact
