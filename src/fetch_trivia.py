@@ -2,8 +2,8 @@
 
 流れ:
   1. 記事を選ぶ(カテゴリ→全文取得→機械的に絞り込み)
-  2. Gemini が台本を「1文ずつ・根拠の引用つき」で作成
-  3. 作成した台本と根拠一覧、画像・動画プロンプトを添えて Discord フォーラムへ投稿
+  2. Gemini が台本を「小学生向けです・ます調」「1文ずつ・根拠の引用つき」で作成
+  3. 作成した台本と操作用ボタン（コピー/原文確定/ファクトチェック）を Discord フォーラムへ投稿
   4. 後続の処理用に output/trivia_result.json を保存 (スレッドID追記)
 
 必要な環境変数: DISCORD_TOKEN, FORUM_CHANNEL_ID, GEMINI_API_KEY
@@ -217,9 +217,14 @@ def pick_article():
 
 
 # ------------------------------------------------------------------ 2. 台本生成 (Gemini)
-SCRIPT_PROMPT = """あなたは、歴史の雑学ショート動画の台本作家です。
+SCRIPT_PROMPT = """あなたは、小学生向けの歴史雑学ショート動画の台本作家です。
 下の【原文】だけを材料に、YouTube Shorts 用(読み上げ約1分)のナレーション台本を書いてください。
-目標は「事実の羅列」ではなく、「最後まで聞きたくなる、ひとつの物語」です。
+目標は「事実の羅列」ではなく、「小学生でもワクワクしながら最後まで理解できる、ひとつの物語」です。
+
+【語り口・トンマナ（最重要ルール）】
+・文末はすべて親しみやすい「です・ます調」（「〜です」「〜ます」「〜でしょうか？」）で統一してください。
+・小学生（10〜12歳）にもスッと頭に入るよう、難しい歴史用語・専門用語は噛み砕いたやさしい表現に変換してください。
+  （例: 重装騎兵→本物の騎士／火器→鉄砲や大砲／騎馬演舞・カルーゼル→馬のパレードやダンス）
 
 【STEP 1: 物語の軸と、「問い」と「答え」を決める(最重要)】
 原文から、次のどれか「ひとつだけ」を軸に選びます。
@@ -227,52 +232,46 @@ SCRIPT_PROMPT = """あなたは、歴史の雑学ショート動画の台本作�
 台本のすべての文は、この軸に関係していなければなりません。
 「他にもこんなことがあった」と別の話題に広げたり、同じ種類の事実を並べたりしてはいけません。
 原文が、概説・一覧・年表のようで、軸をひとつに絞れない場合は、台本を書かず narrative_ok を false にしてください。
-(無理に書いて、事実を寄せ集めた台本にするより、見送るほうが良いです。)
 
 次に、この軸の面白さを「問い」の形にして、その「答え」を、先に原文から探します。
   ・答えが書かれた文を、原文から一字一句そのまま写して、plan.answer_quote に入れる。
   ・「なぜ？」(原因・理由)と問うなら、その原因・理由が、原文にはっきり書かれていることを、必ず確認する。
-    書かれていなければ、「なぜ」とは問わず、「何が起きた？」「どれほど？」「誰が？」の形の問いにする。
   ・答えが、原文のどこにも見つからないときは、narrative_ok を false にする。
   ・answer_quote の内容は、「転」か「結」の fact の文として、台本に必ず入れる。
-    問いかけたのに、答えがない台本は、不合格です。
 
 【STEP 2: 起承転結で、つなげて書く】
 各文に part("起","承","転","結")を付け、4つすべてを使います。
-  起: 軸についての、謎や意外な事実で、視聴者が「どうして？」と思う疑問をひとつ立てる(答えが原文にあるものだけ)。
+  起: 軸についての、謎や意外な事実で、視聴者が「どうしてでしょうか？」と思う疑問をひとつ立てる(答えが原文にあるものだけ)。
   承: その疑問の背景(登場人物・場所・状況)を、時間の順に、具体的に語る(fact を複数文)。
-  転: 状況が変わる出来事・ピンチ・意外な事実を語る(fact を複数文)。「ところが」「しかし」「実は」などでつなぐ。
+  転: 状況が変わる出来事・ピンチ・意外な事実を語る(fact を複数文)。「ですが」「実は」などでつなぐ。
   結: 疑問への答え(answer_quote の内容)と、結末を fact で語る。そのあと、感想、視聴者への問いかけで締める。
-      最初の問いかけに「戻る」形(回収)にすると、まとまりが出ます。
-・文と文は、前の文を受けて次の文が続くようにします。「そして」「その後」「ところが」「しかし」「実は」「さて」などの、つなぎ言葉を使ってよい。
-・因果の言葉(「その結果」「そのため」「だから」「このため」「〜のせいで」「〜が原因」)は、その文の引用が、因果を英語で述べている
-  (because, due to, as a result, led to, caused など)ときだけ使えます。それ以外では使わず、「そして」「その後」でつなぐ。
-・語り口は、視聴者に話しかけるように。短い文、具体的な名詞(人・物・場所)で、映像が浮かぶように書く。
+
+【ファクトチェックを通過するための重要注意事項】
+・単一の原因に限定して断定しないでください（❌「一番の理由は〜」「〜のせいで」）。
+  「〜といった理由がありました」「〜など、さまざまな要因が重なりました」のように柔軟な表現にしてください。
+・因果関係を直接的に断定しすぎないでください（例: 歴史的イベントが現代のショーへ直接移行したと断定せず、「〜へと形を変えながら受け継がれていきました」のように史実に忠実にぼかす）。
+・因果の言葉(「その結果」「そのため」「だから」)は、原文の引用が明らかな因果関係(because, due to, as a result, led to, caused など)を述べているときだけ使用可能です。
 
 【STEP 3: 事実と感想の書き分け(ルール)】
 ・台本は「1文ずつ」に分け、各文に type を付けます。
   - "fact": 原文に書かれた事実を述べる文(全体で5文以上)。必ず evidence_quote を付ける。
   - "opinion": 問いかけ・感想・まとめの文(全体で2〜3文)。evidence_quote は null。
     ・新しい事実を主張してはいけません(数字・年代は入れない)。「〜かもしれません」「〜と思いませんか？」のようにぼかす。
-    ・fact の文に出てくる人物や物の名前を、問いかけに使うのは、かまいません。
-    ・感想は「直前の fact への素直な反応(例: それは驚きですよね。)」か「視聴者への問いかけ」の形にします。
+    ・感想は「直前の fact への素直な反応(例: とても驚きですよね。)」か「視聴者への問いかけ」の形にします。
 ・fact の evidence_quote は、【原文】から一字一句そのまま写した、英語の連続した引用(15〜300文字)。
   要約・言い換え・「...」での省略・翻訳をしてはいけません。
 ・fact の text に入れてよい内容は、その引用が直接裏付けるものだけです。
   - 数字・人名・地名・年代は、引用にあるものだけを使う。アラビア数字で書く(例: 1567年, 14世紀)。
   - 単位の換算や、年の計算をしない。引用の数値をそのまま使う。
-  - 人物の動機・感情・因果関係を、引用になければ書かない。
-・原文に書かれていないことは、一切足さない。「異説がある」「伝承とされる」など、原文がぼかしている点は、そのままぼかす。
 
 【長さ】
-・台本全体で350〜500文字。1文は60文字以内。小学生にも分かるやさしい言葉で。
-・長さが足りないときは、別の話題を足さず、「軸に沿った具体的な描写(誰が、どこで、何を、どうした)」を、原文から丁寧に拾って増やす。
+・台本全体で350〜500文字。1文は60文字以内。
 
-【構成の例(中身は真似しないこと。型だけの参考)】
-  起(opinion): 「〇〇は、なぜ△△だったのでしょう？」
+【構成の例(中身は真似しないこと。型と「です・ます調」の参考)】
+  起(opinion): 「〇〇は、なぜ△△だったのでしょうか？」
   承(fact): 「〇〇は、□□に生まれました。」「そして、□□で△△をしていました。」
-  転(fact): 「ところが、△△の年に、◇◇が起きます。」「実は、◇◇は〜でした。」
-  結(fact→opinion): 「こうして、〇〇は△△になりました。」「それは驚きですよね。あなたなら、どう思いますか？」
+  転(fact): 「ですが、△△の年に、◇◇が起きます。」「実は、◇◇には〜といった理由がありました。」
+  結(fact→opinion): 「こうして、〇〇は△△になっていったのです。」「とても驚きですよね。みなさんはどう思いますか？」
 
 {feedback}
 【記事タイトル】{title}
@@ -357,23 +356,29 @@ def script_text(sentences):
 
 # ------------------------------------------------------------------ 3. Discord 投稿 & 保存
 def build_messages(article, data):
-    jst = timezone(timedelta(hours=9))
-    accessed = datetime.now(jst).strftime("%Y/%m/%d %H:%M")
-    sents = data["sentences"]
+  """概要メッセージと、コードブロック単体の台本メッセージを2つ作成する。"""
+  jst = timezone(timedelta(hours=9))
+  accessed = datetime.now(jst).strftime("%Y/%m/%d %H:%M")
+  sents = data["sentences"]
+  pure_script = script_text(sents)
 
-    main = (
-        f"**【概要】**\n{data['summary']}\n\n"
-        f"**【生成された台本（VOICEVOX用）】**\n{script_text(sents)}\n\n"
-        f"📚 **【出典情報】**\n"
-        f"・原題: `{article['title']}`\n"
-        f"・URL: <{article['fullurl']}>\n"
-        f"・ライセンス: CC BY-SA 4.0\n"
-        f"・閲覧日時: {accessed} (JST)\n\n"
-        f"--- \n"
-        f"✏️ 目視で確認・添削し、修正後の文章（または元の文章）を返信投稿後、**［ 🛡️ ファクトチェック実行 ］** ボタンを押してください。"
-    )
+  # 1. 概要・出典・案内メッセージ
+  info_msg = (
+      f"**【概要】**\n{data['summary']}\n\n"
+      f"📚 **【出典情報】**\n"
+      f"・原題: `{article['title']}`\n"
+      f"・URL: <{article['fullurl']}>\n"
+      f"・ライセンス: CC BY-SA 4.0\n"
+      f"・閲覧日時: {accessed} (JST)\n\n"
+      f"--- \n"
+      f"✏️ 以下のコードブロックをコピーして修正後、返信投稿してください。\n"
+      f"投稿にスタンプ（リアクション）を付けて `/fact` と入力するとファクトチェックが実行されます。"
+  )
 
-    return main
+  # 2. 台本のみのメッセージ（コピー専用）
+  script_msg = f"{pure_script}"
+
+  return info_msg, script_msg
 
 
 def save_trivia_json(article, data, thread_id=None):
@@ -403,41 +408,45 @@ def save_trivia_json(article, data, thread_id=None):
 
 
 def post_to_discord(article, data):
-    import discord
+  import discord
 
-    main_msg = build_messages(article, data)
-    result = {"ok": False}
+  info_msg, script_msg = build_messages(article, data)
+  result = {"ok": False}
 
-    class Poster(discord.Client):
+  class Poster(discord.Client):
 
-        async def on_ready(self):
-            log(f"🤖 Discord Bot ログイン完了: {self.user}")
-            try:
-                ch = self.get_channel(FORUM_CHANNEL_ID) or await self.fetch_channel(
-                    FORUM_CHANNEL_ID
-                )
-                if not isinstance(ch, discord.ForumChannel):
-                    log("❌ フォーラムチャンネルが見つかりませんでした。")
-                else:
-                    t = await ch.create_thread(
-                        name=f"📜 {data['title']}"[:100], content=main_msg
-                    )
-                    thread = t.thread
-                    save_trivia_json(article, data, thread.id)
-                    
-                    log(
-                        f"🎉 投稿完了: {thread.name} (Thread ID: {thread.id})"
-                    )
-                    result["ok"] = True
-            except Exception as e:
-                log(f"❌ Discord 投稿エラー: {e}")
-            finally:
-                await self.close()
+    async def on_ready(self):
+      log(f"🤖 Discord Bot ログイン完了: {self.user}")
+      try:
+        ch = self.get_channel(FORUM_CHANNEL_ID) or await self.fetch_channel(
+            FORUM_CHANNEL_ID
+        )
+        if not isinstance(ch, discord.ForumChannel):
+          log("❌ フォーラムチャンネルが見つかりませんでした。")
+        else:
+          # 1. 概要・出典情報でスレッドを作成
+          t = await ch.create_thread(
+              name=f"📜 {data['title']}"[:100], content=info_msg
+          )
+          thread = t.thread
 
-    intents = discord.Intents.default()
-    intents.guilds = True
-    Poster(intents=intents).run(DISCORD_TOKEN)
-    return result["ok"]
+          # 2. コードブロック単体のメッセージを連続投稿（コピー用）
+          await thread.send(script_msg)
+
+          save_trivia_json(article, data, thread.id)
+          log(
+              f"🎉 投稿完了: {thread.name} (Thread ID: {thread.id})"
+          )
+          result["ok"] = True
+      except Exception as e:
+        log(f"❌ Discord 投稿エラー: {e}")
+      finally:
+        await self.close()
+
+  intents = discord.Intents.default()
+  intents.guilds = True
+  Poster(intents=intents).run(DISCORD_TOKEN)
+  return result["ok"]
 
 
 # ------------------------------------------------------------------ main
