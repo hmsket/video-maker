@@ -64,8 +64,8 @@ MIN_ARTICLE_CHARS = int(os.environ.get("MIN_ARTICLE_CHARS", "3000"))
 EXCLUDE_TITLE_REGEX = os.environ.get(
     "EXCLUDE_TITLE_REGEX",
     r"^(History|Economy|Culture|Society|Religion|Geography|Demographics|Politics|Architecture|Art|Music|Science|Law|Economic history|Military history) of\b"
-    r"|^(Ancient|Medieval|Early modern|Modern) [a-z]+\b"
-    r"| in (the )?(ancient|medieval|early modern)\b|(period|era|age|ages)$\vert{}^Middle Ages$",
+    r"| in (the )?(ancient|medieval|early modern)\b|(period|era|age|ages)$"
+    r"|^Middle Ages$",
 )
 
 WIKI_API = "https://en.wikipedia.org/w/api.php"
@@ -330,50 +330,65 @@ def call_gemini_json(prompt):
     raise RuntimeError(f"Gemini の呼び出しにすべて失敗しました: {last}")
 
 
-def call_groq_json_fallback(prompt):
-    """Gemini 全滅時の Groq フォールバック処理"""
-    if not GROQ_API_KEY:
-        raise RuntimeError("GROQ_API_KEY が設定されていないため Groq フォールバックをスキップします。")
+GROQ_MODELS = _env_list("GROQ_MODELS", "openai/gpt-oss-120b,openai/gpt-oss-20b")
 
-    log("🚀 Gemini 全滅のため、Groq (llama-3.3-70b-versatile) へフォールバックを実行します...")
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": [
-            {"role": "system", "content": "あなたは優秀な歴史雑学ショート動画の台本作家です。返答は解説などの余計なテキストを含めず、指定されたJSONオブジェクトのみを出力してください。"},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.3,
-    }
 
+def list_groq_models():
+    """このキーで実際に使えるモデルID一覧(404のとき、ログに出して原因を確認するため)。"""
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT_SEC)
-        
-        # 💡 エラーが発生した場合、Groq が返した生の応答本文をログに出力する
-        if not res.ok:
-            log(f"❌ Groq API エラー詳細 ({res.status_code}): {res.text}")
-            res.raise_for_status()
-
-        reply_content = res.json()["choices"][0]["message"]["content"]
-        
-        # 💡 レスポンスから JSON 部分だけを正規表現で切り出し
-        json_match = re.search(r"\{[\s\S]*\}", reply_content)
-        if json_match:
-            data = json.loads(json_match.group(0))
-        else:
-            data = json.loads(reply_content)
-
-        if isinstance(data, dict):
-            log("✅ Groq (llama-3.3-70b-versatile) で台本作成に成功しました！")
-            return data
-
+        r = requests.get("https://api.groq.com/openai/v1/models",
+                         headers={"Authorization": f"Bearer {GROQ_API_KEY}"}, timeout=HTTP_TIMEOUT_SEC)
+        r.raise_for_status()
+        return [m["id"] for m in r.json().get("data", [])]
     except Exception as e:
-        log(f"❌ Groq API フォールバック処理で例外発生: {e}")
-        raise RuntimeError(f"Groq 呼び出し例外: {e}")
+        log(f"⚠️ Groq のモデル一覧を取得できませんでした: {e}")
+        return []
+
+
+def call_groq_json_fallback(prompt):
+    """Gemini 全滅時の Groq フォールバック。モデルを順に試す。"""
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY が未設定のため、Groq フォールバックをスキップします。")
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    last = None
+    listed = False
+    for model in GROQ_MODELS:
+        if out_of_time():
+            break
+        log(f"🚀 Groq ({model}) で台本を作成中...")
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "あなたは優秀な歴史雑学ショート動画の台本作家です。解説は書かず、指定されたJSONオブジェクトだけを出力してください。"},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.3,
+            "response_format": {"type": "json_object"},
+        }
+        if "gpt-oss" in model:
+            payload["reasoning_effort"] = "low"
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT_SEC)
+            if not res.ok:
+                log(f"❌ Groq ({model}) HTTP {res.status_code}: {res.text[:300]}")
+                if res.status_code in (400, 404) and not listed:
+                    listed = True
+                    log(f"ℹ️ このキーで使えるモデル: {', '.join(list_groq_models()) or '(取得失敗)'}")
+                last = RuntimeError(f"HTTP {res.status_code}")
+                if res.status_code == 429:
+                    time.sleep(5)
+                continue
+            data = extract_json(res.json()["choices"][0]["message"]["content"])
+            if isinstance(data, dict):
+                log(f"✅ Groq ({model}) で台本作成に成功しました")
+                return data
+            last = RuntimeError("JSON を取り出せませんでした")
+        except Exception as e:
+            last = e
+            log(f"⚠️ Groq ({model}): {e}")
+    raise RuntimeError(f"Groq の呼び出しにすべて失敗しました: {last}")
 
 
 def generate_draft(article):
