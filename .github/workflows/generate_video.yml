@@ -90,7 +90,7 @@ jobs:
       - name: Run Voice & Subtitle Generation
         env:
           AIVIS_URL: "http://127.0.0.1:10101"
-          THREAD_ID: ${{ github.event.inputs.thread_id }}
+          THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
         run: |
           python src/prepare_trivia.py
@@ -100,11 +100,16 @@ jobs:
       - name: Generate Images with Imagen 3
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
         run: |
           python src/generate_image.py
 
       # 8. FFmpeg による仮組み動画生成
       - name: Build Draft Video
+        env:
+          THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
         run: |
           python src/generate_video.py
 

@@ -3,6 +3,7 @@ import re
 import json
 import requests
 from pydub import AudioSegment
+from discord_notifier import send_to_discord
 
 AIVIS_URL = os.environ.get("AIVIS_URL", "http://localhost:10101")
 SPEAKER_ID = int(os.environ.get("SPEAKER_ID", "888753760")) # デフォルト話者ID
@@ -62,16 +63,26 @@ def generate_voice_and_srt(script_text, output_dir="output"):
         current_time_ms += duration_ms
         
     # 全体音声書き出し
-    combined_audio.export(os.path.join(output_dir, "full_voice.wav"), format="wav")
+    full_voice_path = os.path.join(output_dir, "full_voice.wav")
+    combined_audio.export(full_voice_path, format="wav")
     
     # 字幕ファイル書き出し
     with open(os.path.join(output_dir, "subtitles.srt"), "w", encoding="utf-8") as f:
         f.write("\n".join(srt_entries))
         
-    print(f"✅ 音声・字幕生成完了 (計 {len(sentences)} 文, 全長: {current_time_ms / 1000:.2f}秒)")
+    duration_sec = current_time_ms / 1000
+    print(f"✅ 音声・字幕生成完了 (計 {len(sentences)} 文, 全長: {duration_sec:.2f}秒)")
+
+    # Discord 通知（全体音声ファイルを添付）
+    msg = f"🎙️ **【進捗通知】音声・字幕の生成が完了しました！**\n- **文章数:** {len(sentences)} 文\n- **音声長:** {duration_sec:.2f} 秒"
+    send_to_discord(msg, file_path=full_voice_path)
 
 if __name__ == "__main__":
     # Discordからの入力またはローカルのjsonから台本を取得
-    with open("output/trivia_result.json", "r", encoding="utf-8") as f:
-        data = json.load(f)
-    generate_voice_and_srt(data["script_text"])
+    json_path = "output/trivia_result.json"
+    if os.path.exists(json_path):
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        generate_voice_and_srt(data["script_text"])
+    else:
+        print(f"⚠️ {json_path} が存在しません。")

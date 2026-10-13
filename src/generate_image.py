@@ -2,11 +2,13 @@ import os
 import json
 import base64
 import requests
+from discord_notifier import send_to_discord
 
 def generate_scene_images(image_prompts, output_dir="output"):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         print("⚠️ GEMINI_API_KEY が設定されていないため、画像の生成をスキップします。")
+        send_to_discord("⚠️ **【進捗通知】GEMINI_API_KEY が未設定のため画像生成をスキップしました。**")
         return
 
     os.makedirs(output_dir, exist_ok=True)
@@ -30,6 +32,7 @@ def generate_scene_images(image_prompts, output_dir="output"):
             res = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
             if not res.ok:
                 print(f"  ⚠️ Scene {idx} APIエラー ({res.status_code}): {res.text}")
+                send_to_discord(f"⚠️ **【進捗通知】Scene {idx} の画像生成に失敗しました ({res.status_code})**")
                 continue
 
             data = res.json()
@@ -42,6 +45,10 @@ def generate_scene_images(image_prompts, output_dir="output"):
                     with open(image_path, "wb") as f:
                         f.write(img_bytes)
                     print(f"  └ 保存完了: {image_path}")
+
+                    # 🖼️ 生成された画像を Discord に送信
+                    msg = f"🖼️ **【進捗通知】Scene {idx} の背景画像を生成しました！**\n**プロンプト:** `{prompt}`"
+                    send_to_discord(msg, file_path=image_path)
             else:
                 print(f"  ⚠️ Scene {idx} 応答データ構造が不正です: {data}")
 
@@ -54,3 +61,5 @@ if __name__ == "__main__":
         with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         generate_scene_images(data.get("image_prompts", []))
+    else:
+        print(f"⚠️ {json_path} が存在しません。")

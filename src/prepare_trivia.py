@@ -2,6 +2,7 @@ import os
 import json
 import re
 import requests
+from discord_notifier import send_to_discord
 
 def prepare_trivia():
     os.makedirs("output", exist_ok=True)
@@ -55,6 +56,13 @@ def prepare_trivia():
         json.dump(data, f, ensure_ascii=False, indent=2)
 
     print(f"✅ {json_path} を作成・準備しました。")
+
+    # 台本と生成用プロンプトが確定したら投稿
+    prompts_formatted = "\n".join([f"- {p}" for p in data.get("image_prompts", [])])
+    script_content = data.get("script_text", "")
+
+    msg = f"📝 **【進捗通知】台本・画像プロンプトを準備しました**\n\n**■ 画像プロンプト:**\n```{prompts_formatted}```\n**■ 確定台本:**\n```{script_content}```"
+    send_to_discord(msg)
 
 if __name__ == "__main__":
     prepare_trivia()
