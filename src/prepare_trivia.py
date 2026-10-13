@@ -61,8 +61,10 @@ def prepare_trivia():
     prompts_formatted = "\n".join([f"- {p}" for p in data.get("image_prompts", [])])
     script_content = data.get("script_text", "")
 
-    msg = f"📝 **【進捗通知】台本・画像プロンプトを準備しました**\n\n**■ 画像プロンプト:**\n```{prompts_formatted}```\n**■ 確定台本:**\n```{script_content}```"
+    msg = f"📝 **【進捗通知】台本・画像プロンプトを準備しました**"
     send_to_discord(msg)
+    send_to_discord(prompts_formatted)
+    send_to_discord(script_content)
 
 if __name__ == "__main__":
     prepare_trivia()
