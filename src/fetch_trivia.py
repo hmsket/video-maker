@@ -331,11 +331,11 @@ def call_gemini_json(prompt):
 
 
 def call_groq_json_fallback(prompt):
-    """Gemini 全滅時の Groq (LLaMA-3.3-70b) フォールバック処理"""
+    """Gemini 全滅時の Groq フォールバック処理"""
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY が設定されていないため Groq フォールバックをスキップします。")
 
-    log("🚀 Gemini 全滅のため、Groq (LLaMA-3.3-70b) へフォールバックを実行します...")
+    log("🚀 Gemini 全滅のため、Groq (llama-3.3-70b-versatile) へフォールバックを実行します...")
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -344,7 +344,7 @@ def call_groq_json_fallback(prompt):
     payload = {
         "model": "llama-3.3-70b-versatile",
         "messages": [
-            {"role": "system", "content": "あなたは優秀な歴史雑学ショート動画の台本作家です。返答は余計な解説を一切含めず、指定されたJSONオブジェクトのみを返してください。"},
+            {"role": "system", "content": "あなたは優秀な歴史雑学ショート動画の台本作家です。返答は解説などの余計なテキストを含めず、指定されたJSONオブジェクトのみを出力してください。"},
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.3,
@@ -352,10 +352,15 @@ def call_groq_json_fallback(prompt):
 
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT_SEC)
-        res.raise_for_status()
+        
+        # 💡 エラーが発生した場合、Groq が返した生の応答本文をログに出力する
+        if not res.ok:
+            log(f"❌ Groq API エラー詳細 ({res.status_code}): {res.text}")
+            res.raise_for_status()
+
         reply_content = res.json()["choices"][0]["message"]["content"]
         
-        # 💡 マークダウン装飾 (```json ... ```) や余計な文字を除去して JSON パース
+        # 💡 レスポンスから JSON 部分だけを正規表現で切り出し
         json_match = re.search(r"\{[\s\S]*\}", reply_content)
         if json_match:
             data = json.loads(json_match.group(0))
@@ -363,10 +368,11 @@ def call_groq_json_fallback(prompt):
             data = json.loads(reply_content)
 
         if isinstance(data, dict):
-            log("✅ Groq (LLaMA-3.3-70b) で台本作成に成功しました！")
+            log("✅ Groq (llama-3.3-70b-versatile) で台本作成に成功しました！")
             return data
+
     except Exception as e:
-        log(f"❌ Groq API フォールバックにも失敗しました: {e}")
+        log(f"❌ Groq API フォールバック処理で例外発生: {e}")
         raise RuntimeError(f"Groq 呼び出し例外: {e}")
 
 
