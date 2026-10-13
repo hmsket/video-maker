@@ -7,7 +7,7 @@
   4. 後続の処理用に output/trivia_result.json を保存 (スレッドID追記)
 
 必要な環境変数: DISCORD_TOKEN, FORUM_CHANNEL_ID, GEMINI_API_KEY
-任意: GEMINI_MODELS, WIKI_CATEGORIES, MAX_ARTICLES
+任意: GROQ_API_KEY, GEMINI_MODELS, WIKI_CATEGORIES, MAX_ARTICLES
 """
 
 import json
@@ -33,6 +33,8 @@ def log(*args):
 # ------------------------------------------------------------------ 設定
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+
 try:
     FORUM_CHANNEL_ID = int(os.environ.get("FORUM_CHANNEL_ID", "0").strip())
 except ValueError:
@@ -216,7 +218,7 @@ def pick_article():
     return None
 
 
-# ------------------------------------------------------------------ 2. 台本生成 (Gemini)
+# ------------------------------------------------------------------ 2. 台本生成 (Gemini & Groq Fallback)
 SCRIPT_PROMPT = """あなたは、小学生向けの歴史雑学ショート動画の台本作家です。
 下の【原文】だけを材料に、YouTube Shorts / TikTok 用(読み上げ約30〜40秒)のナレーション台本を書いてください。
 目標は「事実の羅列」ではなく、「小学生でもワクワクしながら最後まで理解できる、テンポの良いショート物語」です。
@@ -328,11 +330,55 @@ def call_gemini_json(prompt):
     raise RuntimeError(f"Gemini の呼び出しにすべて失敗しました: {last}")
 
 
+def call_groq_json_fallback(prompt):
+    """Gemini 全滅時の Groq (LLaMA-3.3-70b) フォールバック処理"""
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY が設定されていないため Groq フォールバックをスキップします。")
+
+    log("🚀 Gemini 全滅のため、Groq (LLaMA-3.3-70b) へフォールバックを実行します...")
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": "あなたは優秀な歴史雑学ショート動画の台本作家です。指定されたJSONフォーマットのみを出力してください。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.3,
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT_SEC)
+        res.raise_for_status()
+        reply_content = res.json()["choices"][0]["message"]["content"]
+        data = json.loads(reply_content)
+        if isinstance(data, dict):
+            log("✅ Groq (LLaMA-3.3-70b) で台本作成に成功しました！")
+            return data
+    except Exception as e:
+        log(f"❌ Groq API フォールバックにも失敗しました: {e}")
+        raise RuntimeError(f"Groq 呼び出し例外: {e}")
+
+
 def generate_draft(article):
     prompt = SCRIPT_PROMPT.replace("{title}", article["title"]).replace(
         "{text}", article["text"]
-    )
-    d = call_gemini_json(prompt)
+    ).replace("{feedback}", "")
+
+    d = None
+    try:
+        d = call_gemini_json(prompt)
+    except Exception as gemini_err:
+        log(f"⚠️ {gemini_err}")
+        try:
+            d = call_groq_json_fallback(prompt)
+        except Exception as groq_err:
+            raise RuntimeError(f"すべての AI モデル (Gemini/Groq) での台本生成に失敗しました: {groq_err}")
+
     if d.get("narrative_ok") is False:
         raise NarrativeUnsuitable(d.get("reason_if_not") or "軸を絞れない記事")
     sents = d.get("sentences")
@@ -352,29 +398,29 @@ def script_text(sentences):
 
 # ------------------------------------------------------------------ 3. Discord 投稿 & 保存
 def build_messages(article, data):
-  """概要メッセージと、コードブロック単体の台本メッセージを2つ作成する。"""
-  jst = timezone(timedelta(hours=9))
-  accessed = datetime.now(jst).strftime("%Y/%m/%d %H:%M")
-  sents = data["sentences"]
-  pure_script = script_text(sents)
+    """概要メッセージと、コードブロック単体の台本メッセージを2つ作成する。"""
+    jst = timezone(timedelta(hours=9))
+    accessed = datetime.now(jst).strftime("%Y/%m/%d %H:%M")
+    sents = data["sentences"]
+    pure_script = script_text(sents)
 
-  # 1. 概要・出典・案内メッセージ
-  info_msg = (
-      f"**【概要】**\n{data['summary']}\n\n"
-      f"📚 **【出典情報】**\n"
-      f"・原題: `{article['title']}`\n"
-      f"・URL: <{article['fullurl']}>\n"
-      f"・ライセンス: CC BY-SA 4.0\n"
-      f"・閲覧日時: {accessed} (JST)\n\n"
-      f"--- \n"
-      f"✏️ 以下のコードブロックをコピーして修正後、返信投稿してください。\n"
-      f"投稿にスタンプ（リアクション）を付けて `/fact` と入力するとファクトチェックが実行されます。"
-  )
+    # 1. 概要・出典・案内メッセージ
+    info_msg = (
+        f"**【概要】**\n{data['summary']}\n\n"
+        f"📚 **【出典情報】**\n"
+        f"・原題: `{article['title']}`\n"
+        f"・URL: <{article['fullurl']}>\n"
+        f"・ライセンス: CC BY-SA 4.0\n"
+        f"・閲覧日時: {accessed} (JST)\n\n"
+        f"--- \n"
+        f"✏️ 以下のコードブロックをコピーして修正後、返信投稿してください。\n"
+        f"投稿にスタンプ（リアクション）を付けて `/fact` と入力するとファクトチェックが実行されます。"
+    )
 
-  # 2. 台本のみのメッセージ（コピー専用）
-  script_msg = f"{pure_script}"
+    # 2. 台本のみのメッセージ（コピー専用）
+    script_msg = f"{pure_script}"
 
-  return info_msg, script_msg
+    return info_msg, script_msg
 
 
 def save_trivia_json(article, data, thread_id=None):
@@ -404,45 +450,45 @@ def save_trivia_json(article, data, thread_id=None):
 
 
 def post_to_discord(article, data):
-  import discord
+    import discord
 
-  info_msg, script_msg = build_messages(article, data)
-  result = {"ok": False}
+    info_msg, script_msg = build_messages(article, data)
+    result = {"ok": False}
 
-  class Poster(discord.Client):
+    class Poster(discord.Client):
 
-    async def on_ready(self):
-      log(f"🤖 Discord Bot ログイン完了: {self.user}")
-      try:
-        ch = self.get_channel(FORUM_CHANNEL_ID) or await self.fetch_channel(
-            FORUM_CHANNEL_ID
-        )
-        if not isinstance(ch, discord.ForumChannel):
-          log("❌ フォーラムチャンネルが見つかりませんでした。")
-        else:
-          # 1. 概要・出典情報でスレッドを作成
-          t = await ch.create_thread(
-              name=f"📜 {data['title']}"[:100], content=info_msg
-          )
-          thread = t.thread
+        async def on_ready(self):
+            log(f"🤖 Discord Bot ログイン完了: {self.user}")
+            try:
+                ch = self.get_channel(FORUM_CHANNEL_ID) or await self.fetch_channel(
+                    FORUM_CHANNEL_ID
+                )
+                if not isinstance(ch, discord.ForumChannel):
+                    log("❌ フォーラムチャンネルが見つかりませんでした。")
+                else:
+                    # 1. 概要・出典情報でスレッドを作成
+                    t = await ch.create_thread(
+                        name=f"📜 {data['title']}"[:100], content=info_msg
+                    )
+                    thread = t.thread
 
-          # 2. コードブロック単体のメッセージを連続投稿（コピー用）
-          await thread.send(script_msg)
+                    # 2. コードブロック単体のメッセージを連続投稿（コピー用）
+                    await thread.send(script_msg)
 
-          save_trivia_json(article, data, thread.id)
-          log(
-              f"🎉 投稿完了: {thread.name} (Thread ID: {thread.id})"
-          )
-          result["ok"] = True
-      except Exception as e:
-        log(f"❌ Discord 投稿エラー: {e}")
-      finally:
-        await self.close()
+                    save_trivia_json(article, data, thread.id)
+                    log(
+                        f"🎉 投稿完了: {thread.name} (Thread ID: {thread.id})"
+                    )
+                    result["ok"] = True
+            except Exception as e:
+                log(f"❌ Discord 投稿エラー: {e}")
+            finally:
+                await self.close()
 
-  intents = discord.Intents.default()
-  intents.guilds = True
-  Poster(intents=intents).run(DISCORD_TOKEN)
-  return result["ok"]
+    intents = discord.Intents.default()
+    intents.guilds = True
+    Poster(intents=intents).run(DISCORD_TOKEN)
+    return result["ok"]
 
 
 # ------------------------------------------------------------------ main
