@@ -331,33 +331,39 @@ def call_gemini_json(prompt):
 
 
 def call_groq_json_fallback(prompt):
-    """Gemini 全滅時の Groq フォールバック処理"""
+    """Gemini 全滅時の Groq (LLaMA-3.3-70b) フォールバック処理"""
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY が設定されていないため Groq フォールバックをスキップします。")
 
-    log("🚀 Gemini 全滅のため、Groq (openai/gpt-oss-120b) へフォールバックを実行します...")
+    log("🚀 Gemini 全滅のため、Groq (LLaMA-3.3-70b) へフォールバックを実行します...")
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "openai/gpt-oss-120b",  # 👈 こちらの動作実績のあるモデル名に変更
+        "model": "llama-3.3-70b-versatile",
         "messages": [
-            {"role": "system", "content": "あなたは優秀な歴史雑学ショート動画の台本作家です。指定されたJSONフォーマットのみを出力してください。"},
+            {"role": "system", "content": "あなたは優秀な歴史雑学ショート動画の台本作家です。返答は余計な解説を一切含めず、指定されたJSONオブジェクトのみを返してください。"},
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.3,
-        "response_format": {"type": "json_object"},
     }
 
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT_SEC)
         res.raise_for_status()
         reply_content = res.json()["choices"][0]["message"]["content"]
-        data = json.loads(reply_content)
+        
+        # 💡 マークダウン装飾 (```json ... ```) や余計な文字を除去して JSON パース
+        json_match = re.search(r"\{[\s\S]*\}", reply_content)
+        if json_match:
+            data = json.loads(json_match.group(0))
+        else:
+            data = json.loads(reply_content)
+
         if isinstance(data, dict):
-            log("✅ Groq で台本作成に成功しました！")
+            log("✅ Groq (LLaMA-3.3-70b) で台本作成に成功しました！")
             return data
     except Exception as e:
         log(f"❌ Groq API フォールバックにも失敗しました: {e}")
