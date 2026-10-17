@@ -344,6 +344,12 @@ def call_gemini_json(prompt):
 
 GROQ_MODELS = _env_list("GROQ_MODELS", "openai/gpt-oss-120b,openai/gpt-oss-20b")
 
+GROQ_SYSTEM_HINT = (
+    "あなたは優秀な歴史雑学ショート動画の台本作家です。"
+    "出力は { で始まり } で終わる、指定されたキーを持つ JSON オブジェクト**だけ**にしてください。"
+    "前置き・解説・コードブロック・ [[]] などの囲みは絶対に付けないこと。"
+)
+
 
 def list_groq_models():
     """このキーで実際に使えるモデルID一覧(404のとき、ログに出して原因を確認するため)。"""
@@ -358,7 +364,12 @@ def list_groq_models():
 
 
 def call_groq_json_fallback(prompt):
-    """Gemini 全滅時の Groq フォールバック。モデルを順に試す。"""
+    """Gemini 全滅時の Groq フォールバック。モデルを順に試す。
+
+    Groq の JSON 強制モード (response_format: json_object) は、長大なプロンプトだと
+    「Failed to generate JSON (400)」で落ちることがある。その場合は
+    モードを外して再試行し、応答テキストから extract_json() で JSON を拾う。
+    """
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY が未設定のため、Groq フォールバックをスキップします。")
 
@@ -369,37 +380,44 @@ def call_groq_json_fallback(prompt):
     for model in GROQ_MODELS:
         if out_of_time():
             break
-        log(f"🚀 Groq ({model}) で台本を作成中...")
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "あなたは優秀な歴史雑学ショート動画の台本作家です。解説は書かず、指定されたJSONオブジェクトだけを出力してください。"},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.3,
-            "response_format": {"type": "json_object"},
-        }
-        if "gpt-oss" in model:
-            payload["reasoning_effort"] = "low"
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT_SEC)
-            if not res.ok:
-                log(f"❌ Groq ({model}) HTTP {res.status_code}: {res.text[:300]}")
-                if res.status_code in (400, 404) and not listed:
-                    listed = True
-                    log(f"ℹ️ このキーで使えるモデル: {', '.join(list_groq_models()) or '(取得失敗)'}")
-                last = RuntimeError(f"HTTP {res.status_code}")
-                if res.status_code == 429:
-                    time.sleep(5)
-                continue
-            data = extract_json(res.json()["choices"][0]["message"]["content"])
-            if isinstance(data, dict):
-                log(f"✅ Groq ({model}) で台本作成に成功しました")
-                return data
-            last = RuntimeError("JSON を取り出せませんでした")
-        except Exception as e:
-            last = e
-            log(f"⚠️ Groq ({model}): {e}")
+        # 1回目: JSON 強制モードあり → 400 で失敗したら 2回目: モードなしで再試行
+        for use_json_mode in (True, False):
+            if out_of_time():
+                break
+            mode_label = "json_mode" if use_json_mode else "no_format"
+            log(f"🚀 Groq ({model}, {mode_label}) で台本を作成中...")
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": GROQ_SYSTEM_HINT},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.3,
+            }
+            if use_json_mode:
+                payload["response_format"] = {"type": "json_object"}
+            if "gpt-oss" in model:
+                payload["reasoning_effort"] = "low"
+            try:
+                res = requests.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT_SEC)
+                if not res.ok:
+                    log(f"❌ Groq ({model}, {mode_label}) HTTP {res.status_code}: {res.text[:300]}")
+                    if res.status_code in (400, 404) and not listed:
+                        listed = True
+                        log(f"ℹ️ このキーで使えるモデル: {', '.join(list_groq_models()) or '(取得失敗)'}")
+                    last = RuntimeError(f"HTTP {res.status_code}")
+                    if res.status_code == 429:
+                        time.sleep(5)
+                    continue  # JSONモードなしで再試行（次ラウンド）
+                data = extract_json(res.json()["choices"][0]["message"]["content"])
+                if isinstance(data, dict):
+                    log(f"✅ Groq ({model}, {mode_label}) で台本作成に成功しました")
+                    return data
+                last = RuntimeError("JSON を取り出せませんでした")
+                log(f"⚠️ Groq ({model}, {mode_label}): {last}")
+            except Exception as e:
+                last = e
+                log(f"⚠️ Groq ({model}, {mode_label}): {e}")
     raise RuntimeError(f"Groq の呼び出しにすべて失敗しました: {last}")
 
 
