@@ -4,6 +4,8 @@ import base64
 import requests
 from discord_notifier import send_to_discord
 
+MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "6"))  # 保険として上限を設ける
+
 def generate_scene_images(image_prompts, output_dir="output"):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -16,7 +18,7 @@ def generate_scene_images(image_prompts, output_dir="output"):
     # 💡 Developer API 用の正しい Imagen 3 エンドポイント
     url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:generateImages?key={api_key}"
 
-    for idx, prompt in enumerate(image_prompts[:3], start=1):
+    for idx, prompt in enumerate(image_prompts[:MAX_IMAGES], start=1):
         print(f"🎨 Scene {idx} 画像生成中: {prompt[:40]}...")
         
         payload = {

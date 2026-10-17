@@ -2,3 +2,5 @@ requests
 google-genai
 discord.py
 groq
+pydub
+

@@ -4,6 +4,7 @@
   1. 記事を選ぶ(カテゴリ→全文取得→機械的に絞り込み)
   2. Gemini が台本を「小学生向けです・ます調」「1文ずつ・根拠の引用つき」で作成
   3. 作成した台本と操作用ボタン（コピー/原文確定/ファクトチェック）を Discord フォーラムへ投稿
+     ※ 動画生成用メタデータ(元台本・プロンプト・出典のJSON)もスレッドに投稿する
   4. 後続の処理用に output/trivia_result.json を保存 (スレッドID追記)
 
 必要な環境変数: DISCORD_TOKEN, FORUM_CHANNEL_ID, GEMINI_API_KEY
@@ -424,6 +425,34 @@ def script_text(sentences):
 
 
 # ------------------------------------------------------------------ 3. Discord 投稿 & 保存
+def build_meta_message(article, data):
+    """動画生成パイプライン用のメタデータ(JSON)をコードブロック付きで作成する。
+
+    prepare_trivia.py が後からスレッドを読み、修正台本以外の
+    (元台本・タイトル・概要・画像/動画プロンプト・出典)をここから復元する。
+    """
+    meta = {
+        "type": "video_maker_meta",
+        "title": data.get("title"),
+        "summary": data.get("summary"),
+        "script_text": script_text(data["sentences"]),
+        "image_prompts": data.get("image_prompts", []),
+        "video_prompts": data.get("video_prompts", []),
+        "article": {
+            "title": article["title"],
+            "url": article.get("fullurl"),
+            "revid": article.get("revid"),
+            "license": "CC BY-SA 4.0",
+        },
+    }
+    # Discord の 2000 文字制限を回避するため圧縮した JSON にする
+    body = json.dumps(meta, ensure_ascii=False, separators=(",", ":"))
+    return (
+        "⚙️ **【生成メタデータ】** 動画生成パイプライン用の内部データです。編集は不要です。\n"
+        f"```json\n{body}\n```"
+    )
+
+
 def build_messages(article, data):
     """概要メッセージと、コードブロック単体の台本メッセージを2つ作成する。"""
     jst = timezone(timedelta(hours=9))
@@ -480,6 +509,7 @@ def post_to_discord(article, data):
     import discord
 
     info_msg, script_msg = build_messages(article, data)
+    meta_msg = build_meta_message(article, data)
     result = {"ok": False}
 
     class Poster(discord.Client):
@@ -501,6 +531,9 @@ def post_to_discord(article, data):
 
                     # 2. コードブロック単体のメッセージを連続投稿（コピー用）
                     await thread.send(script_msg)
+
+                    # 3. 動画生成用メタデータ(JSON)を投稿（prepare_trivia.py が後から読む）
+                    await thread.send(meta_msg)
 
                     save_trivia_json(article, data, thread.id)
                     log(
