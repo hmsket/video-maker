@@ -8,8 +8,10 @@ from discord_notifier import send_to_discord
 
 WIDTH = int(os.environ.get("VIDEO_WIDTH", "1080"))
 HEIGHT = int(os.environ.get("VIDEO_HEIGHT", "1920"))
-# 字幕フォントサイズ（ASS の基準解像度は 384x288 系なので、この値が縦動画にも比率で反映される）
+# 字幕フォントサイズ（ASS 基準解像度は 384x288 系なので、この値が縦動画にも比率で反映される）
 SUB_FONT_SIZE = int(os.environ.get("SUB_FONT_SIZE", "20"))
+# 字幕フォント（Actions ランナーには fonts-noto-cjk をインストール済み）
+SUB_FONT_NAME = os.environ.get("SUB_FONT_NAME", "Noto Sans CJK JP")
 
 
 def create_placeholder_image(output_path, width=WIDTH, height=HEIGHT):
@@ -83,7 +85,7 @@ def build_video(output_dir="output"):
     concat_in = "".join(f"[{i}:v]" for i in range(n))
     filter_complex = (
         f"{concat_in}concat=n={n}:v=1:a=0[v];"
-        f"[v]subtitles={clean_srt_path}:force_style='FontSize={SUB_FONT_SIZE},Alignment=2'[outv]"
+        f"[v]subtitles={clean_srt_path}:force_style='FontName={SUB_FONT_NAME},FontSize={SUB_FONT_SIZE},Alignment=2'[outv]"
     )
     cmd += [
         "-filter_complex", filter_complex,

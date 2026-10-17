@@ -26,7 +26,7 @@ jobs:
 
       - name: Install System Dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y ffmpeg zip
+          sudo apt-get update && sudo apt-get install -y ffmpeg zip fonts-noto-cjk
           python -m pip install --upgrade pip
           pip install requests pydub google-genai
 
