@@ -13,6 +13,58 @@ def split_sentences(text):
     lines = [s.strip() for s in re.split(r'(?<=[。！？\n])', text) if s.strip()]
     return lines
 
+
+# ── 字幕の自然な改行（日本語用） ─────────────────────────────────────
+# 1行あたりの目安文字数。384x288 の ASS 基準に対する字幕フォントサイズとの兼ね合いで調整
+SUB_LINE_MAX_CHARS = int(os.environ.get("SUB_LINE_MAX_CHARS") or "16")
+
+# この文字の「直後」で改行すると自然（句読点）
+_BREAK_AFTER = set("、。！？…")
+# 助詞（1文字）の直後も改行候補（厳密ではないが日本語らしさの近似）
+_SOFT_BREAK_AFTER = set("はがをにてでとも")
+# 2文字の助詞・修飾語の直後
+_TWO_CHAR_BREAKS = {"から", "まで", "より", "けど", "って", "でも", "には", "での", "そして"}
+# 行頭に来てはいけない文字（禁則処理）
+_KINSOKU_HEADS = set("、。！？…」』）］}〜：;")
+
+def wrap_japanese(text, max_chars=SUB_LINE_MAX_CHARS):
+    """1文を日本語として自然な位置で改行して複数行にする。
+
+    優先順位: 句読点の直後 > 助詞の直後 > 強制折返し(禁則処理あり)
+    """
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+
+    lines = []
+    remaining = text
+    half = max(1, max_chars // 2)
+    while len(remaining) > max_chars:
+        window = remaining[:max_chars]
+        cut = 0
+        # 1) 句読点の直後（最も右側にあるものを優先）
+        for i in range(max_chars, half, -1):
+            if window[i - 1] in _BREAK_AFTER:
+                cut = i
+                break
+        # 2) 助詞の直後
+        if not cut:
+            for i in range(max_chars, half, -1):
+                sfx2 = remaining[i - 2:i]
+                if sfx2 in _TWO_CHAR_BREAKS or remaining[i - 1] in _SOFT_BREAK_AFTER:
+                    cut = i
+                    break
+        # 3) 強制折返し（次の行頭が句読点/閉じ括弧なら1文字前へ）
+        if not cut:
+            cut = max_chars
+            while cut > 1 and remaining[cut] in _KINSOKU_HEADS:
+                cut -= 1
+        lines.append(remaining[:cut])
+        remaining = remaining[cut:].lstrip()
+    if remaining:
+        lines.append(remaining)
+    return "\n".join(lines)
+
 def format_srt_time(ms):
     """ミリ秒を SRT の時刻フォーマット (HH:MM:SS,mmm) に変換"""
     sec, msec = divmod(ms, 1000)
@@ -57,7 +109,7 @@ def generate_voice_and_srt(script_text, output_dir="output"):
         start_srt = format_srt_time(current_time_ms)
         end_srt = format_srt_time(current_time_ms + duration_ms)
         
-        srt_entries.append(f"{idx}\n{start_srt} --> {end_srt}\n{sentence}\n")
+        srt_entries.append(f"{idx}\n{start_srt} --> {end_srt}\n{wrap_japanese(sentence)}\n")
         
         combined_audio += audio_seg
         current_time_ms += duration_ms

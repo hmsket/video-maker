@@ -30,6 +30,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests pydub google-genai
 
+      # 独自フォントの追加（リポジトリ変数 EXTRA_FONT_URLS に フォントttfのURL を空白区切りで列挙）
+      # 例: https://github.com/google/fonts/raw/main/ofl/zenmarugothic/ZenMaruGothic-Regular.ttf
+      - name: Install Custom Fonts (optional)
+        env:
+          EXTRA_FONT_URLS: ${{ vars.EXTRA_FONT_URLS }}
+        run: |
+          if [ -n "$EXTRA_FONT_URLS" ]; then
+            sudo mkdir -p /usr/share/fonts/truetype/custom
+            for url in $EXTRA_FONT_URLS; do
+              echo "⬇️ フォント取得: $url"
+              sudo curl -fsSL "$url" -o "/usr/share/fonts/truetype/custom/$(basename "$url")" \
+                || echo "⚠️ 取得失敗（スキップ）: $url"
+            done
+            sudo fc-cache -f >/dev/null
+          else
+            echo "ℹ️ EXTRA_FONT_URLS 未設定のため、追加フォントなしで続行します"
+          fi
+
       # 2. GHCR ログイン (AivisSpeech イメージ取得用の認証)
       - name: Log in to GitHub Container Registry (GHCR)
         uses: docker/login-action@v3
@@ -92,6 +110,7 @@ jobs:
           AIVIS_URL: "http://127.0.0.1:10101"
           THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          SUB_LINE_MAX_CHARS: ${{ vars.SUB_LINE_MAX_CHARS || '16' }}
         run: |
           python src/prepare_trivia.py
           python src/generate_voice.py
@@ -140,6 +159,13 @@ jobs:
         env:
           THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          SUB_FONT_NAME: ${{ vars.SUB_FONT_NAME || 'Noto Sans CJK JP' }}
+          SUB_FONT_SIZE: ${{ vars.SUB_FONT_SIZE || '20' }}
+          SUB_FONT_FILE: ${{ vars.SUB_FONT_FILE }}
+          TITLE_FONT_FILE: ${{ vars.TITLE_FONT_FILE }}
+          TITLE_FONT_SIZE: ${{ vars.TITLE_FONT_SIZE || '72' }}
+          TITLE_INTRO_SEC: ${{ vars.TITLE_INTRO_SEC || '3' }}
+          UPLOAD_TARGET_MB: ${{ vars.UPLOAD_TARGET_MB || '7.5' }}
         run: |
           python src/generate_video.py
 

@@ -10,15 +10,18 @@ from discord_notifier import send_to_discord
 WIDTH = int(os.environ.get("VIDEO_WIDTH", "1080"))
 HEIGHT = int(os.environ.get("VIDEO_HEIGHT", "1920"))
 # 字幕フォントサイズ（ASS 基準解像度は 384x288 系なので、この値が縦動画にも比率で反映される）
-SUB_FONT_SIZE = int(os.environ.get("SUB_FONT_SIZE", "20"))
-# 字幕フォント（Actions ランナーには fonts-noto-cjk をインストール済み）
-SUB_FONT_NAME = os.environ.get("SUB_FONT_NAME", "Noto Sans CJK JP")
+SUB_FONT_SIZE = int(os.environ.get("SUB_FONT_SIZE") or "20")
+# 字幕フォント（Actions ランナーには fonts-noto-cjk をインストール済み。独自フォントは
+# ワークフロー EXTRA_FONT_URLS で /usr/share/fonts/truetype/custom にインストールして指定可）
+DEFAULT_FONT_NAME = "Noto Sans CJK JP"
+DEFAULT_FONT_FILE = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+SUB_FONT_NAME = os.environ.get("SUB_FONT_NAME") or DEFAULT_FONT_NAME
+FONT_FILE = os.environ.get("SUB_FONT_FILE") or DEFAULT_FONT_FILE
+# タイトル用フォント（未指定なら字幕と同じ物を使う）
+TITLE_FONT_FILE = os.environ.get("TITLE_FONT_FILE") or FONT_FILE
 # タイトル表示（イントロ）: 最初の TITLE_INTRO_SEC 秒、1つ目の素材をぼかしてタイトルを出す
-TITLE_INTRO_SEC = float(os.environ.get("TITLE_INTRO_SEC", "3"))
-TITLE_FONT_SIZE = int(os.environ.get("TITLE_FONT_SIZE", "72"))
-FONT_FILE = os.environ.get(
-    "SUB_FONT_FILE", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-)
+TITLE_INTRO_SEC = float(os.environ.get("TITLE_INTRO_SEC") or "3")
+TITLE_FONT_SIZE = int(os.environ.get("TITLE_FONT_SIZE") or "72")
 VIDEO_FPS = int(os.environ.get("VIDEO_FPS", "30"))
 
 
@@ -110,7 +113,7 @@ def _title_intro_filter(fps_norm, title_file):
         f"boxblur=luma_radius=24:luma_power=2,"
         f"eq=brightness=-0.08,"
         f"drawbox=x=0:y=0:w=iw:h=ih:color=black@0.35:t=fill,"
-        f"drawtext=fontfile={FONT_FILE}:textfile={title_file}"
+        f"drawtext=fontfile={TITLE_FONT_FILE}:textfile={title_file}"
         f":fontsize={TITLE_FONT_SIZE}:fontcolor=white"
         f":box=1:boxcolor=black@0.45:boxborderw=24"
         f":x=(w-text_w)/2:y=(h-text_h)/2,"
@@ -167,12 +170,12 @@ def build_video(output_dir="output"):
 
     # Discord へ投稿するためビットレート制御（既定は約7.5MBに収まる目安）
     # より高画質にしたい（手動DL運用）場合は UPLOAD_TARGET_MB を上げる
-    upload_target_mb = float(os.environ.get("UPLOAD_TARGET_MB", "7.5"))
+    upload_target_mb = float(os.environ.get("UPLOAD_TARGET_MB") or "7.5")
     total_bps = upload_target_mb * 1024 * 1024 * 8 / max(total_sec, 1)
     video_bps = int(max(500_000, total_bps - 96_000))  # 音声 96kbps 分を差し引く
 
     fps_norm = f"fps={VIDEO_FPS},settb=AVTB"
-    wm_crop = max(0.0, min(float(os.environ.get("WATERMARK_CROP", "0.08")), 0.3))
+    wm_crop = max(0.0, min(float(os.environ.get("WATERMARK_CROP") or "0.08"), 0.3))
 
     # 各素材を正規化 → [v0]..[v(n-1)]
     parts = []
