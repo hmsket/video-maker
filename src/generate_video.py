@@ -165,6 +165,12 @@ def build_video(output_dir="output"):
             cmd += ["-loop", "1", "-t", str(scene_duration), "-i", asset_path]
     cmd += ["-i", audio_path]
 
+    # Discord へ投稿するためビットレート制御（既定は約7.5MBに収まる目安）
+    # より高画質にしたい（手動DL運用）場合は UPLOAD_TARGET_MB を上げる
+    upload_target_mb = float(os.environ.get("UPLOAD_TARGET_MB", "7.5"))
+    total_bps = upload_target_mb * 1024 * 1024 * 8 / max(total_sec, 1)
+    video_bps = int(max(500_000, total_bps - 96_000))  # 音声 96kbps 分を差し引く
+
     fps_norm = f"fps={VIDEO_FPS},settb=AVTB"
     wm_crop = max(0.0, min(float(os.environ.get("WATERMARK_CROP", "0.08")), 0.3))
 
@@ -206,8 +212,12 @@ def build_video(output_dir="output"):
         "-map", "[outv]",
         "-map", f"{n}:a",
         "-c:v", "libx264",
+        "-b:v", str(video_bps),
+        "-maxrate", str(int(video_bps * 1.4)),
+        "-bufsize", str(int(video_bps * 2.5)),
         "-pix_fmt", "yuv420p",
         "-c:a", "aac",
+        "-b:a", "96k",
         "-shortest",
         output_video_path,
     ]
@@ -225,7 +235,14 @@ def build_video(output_dir="output"):
             f"- **シーン数:** {n}"
             + (f"\n- **イントロ:** 先頭 {TITLE_INTRO_SEC} 秒にタイトル「{title_text[:20]}」を表示" if use_intro else "")
         )
-        send_to_discord(msg, file_path=output_video_path)
+        sent = send_to_discord(msg, file_path=output_video_path)
+        if not sent:
+            # 容量超過（413）などで投稿できなかった場合の案内
+            send_to_discord(
+                "📦 **【案内】動画ファイルが大きすぎて Discord へ直接投稿できませんでした。**\n"
+                "- GitHub の **Actions → 実行 → Artifacts → video-draft-assets** から zip をダウンロードしてください。\n"
+                "- Discord に届くサイズにしたい場合はリポジトリ変数 `UPLOAD_TARGET_MB` を下げて再実行（例: `5`）。"
+            )
 
     except subprocess.CalledProcessError as e:
         print(f"❌ FFmpeg エラーが発生しました: {e}")

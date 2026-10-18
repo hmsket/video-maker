@@ -139,7 +139,7 @@ export default {
 
     const channelId = interaction.channel_id || (interaction.channel && interaction.channel.id);
 
-    // 2. スラッシュコマンド実行 (/fact)
+    // 2. スラッシュコマンド実行 (/fact, /video)
     if (interaction.type === 2) {
       if (interaction.data.name === 'fact') {
         // チェック=ステップ1。不合格なら自分自身へのPOSTで「修正→再チェック」を続ける
@@ -149,6 +149,16 @@ export default {
         return jsonResponse({
           type: 4,
           data: { content: '🛡️ ファクトチェックを開始しました。不合格なら AI の自動修正→再チェックも続けます。経過はスレッドに投稿されます。', flags: 64 }
+        });
+      }
+
+      // /video: いつでも動画作成ワークフローを起動（ボタンが見つからないときの入口）
+      // スレッドに動画クリップ等の添付があればそれを使い、無ければ自動画像生成にフォールバックする
+      if (interaction.data.name === 'video') {
+        ctx.waitUntil(triggerGitHubWorkflow(env, 'generate_video.yml', { thread_id: channelId }));
+        return jsonResponse({
+          type: 4,
+          data: { content: '🎬 動画作成を開始しました！スレッドに添付された動画/画像があればそれを素材に、無ければ自動生成します。完成までお待ちください。', flags: 64 }
         });
       }
     }
@@ -187,6 +197,7 @@ export default {
       }
     }
 
+    console.error(`[INTERACTION] unknown: type=${interaction.type} name=${interaction?.data?.name} (worker.js を最新版に更新してください)`);
     return new Response('Unknown interaction', { status: 400 });
   }
 };
