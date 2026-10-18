@@ -180,7 +180,7 @@ def build_video(output_dir="output"):
     wm_crop = max(0.0, min(float(os.environ.get("WATERMARK_CROP") or "0.08"), 0.3))
 
     # 各素材を正規化 → [v0]..[v(n-1)]
-    parts = []
+    norm_parts = []
     for i in range(n):
         if mode == "clip":
             chain = _norm_chain(f"[{i}:v]", fps_norm)  # クリップには可視水印が付かない想定 → 下端切り詰めなし
@@ -194,20 +194,21 @@ def build_video(output_dir="output"):
                 x0 = (WIDTH - w1) // 2
                 extra = f",crop={w1}:{h1}:{x0}:0"
             chain = _norm_chain(f"[{i}:v]", fps_norm, extra)
-        parts.append(chain + f"[v{i}];")
-
-    labels = [f"[v{i}]" for i in range(n)]
+        norm_parts.append(chain + f"[v{i}];")
 
     # ── イントロ実装: 1つ目の素材を「ぼかし+タイトル 3秒 → 通常画」に分割 ──
+    labels = [f"[v{i}]" for i in range(n)]
+    intro_parts = []
     if use_intro:
-        parts.append("[v0]split=2[v0a][v0b];")
-        parts.append(f"[v0a]{_title_intro_filter(fps_norm, title_file)}[tseg];")
-        parts.append(f"[v0b]{fps_norm},trim={TITLE_INTRO_SEC:.3f},setpts=PTS-STARTPTS[rseg];")
+        intro_parts.append("[v0]split=2[v0a][v0b];")
+        intro_parts.append(f"[v0a]{_title_intro_filter(fps_norm, title_file)}[tseg];")
+        intro_parts.append(f"[v0b]{fps_norm},trim={TITLE_INTRO_SEC:.3f},setpts=PTS-STARTPTS[rseg];")
         labels = ["[tseg]", "[rseg]"] + labels[1:]
 
     concat_in = "".join(labels)
     filter_complex = (
-        "".join(parts)
+        "".join(norm_parts)
+        + "".join(intro_parts)
         + f"{concat_in}concat=n={len(labels)}:v=1:a=0[v];"
         + f"[v]subtitles={clean_srt_path}:force_style='FontName={SUB_FONT_NAME},FontSize={SUB_FONT_SIZE},Alignment=2'[outv]"
     )
@@ -232,6 +233,40 @@ def build_video(output_dir="output"):
         subprocess.run(cmd, check=True)
         print(f"🎉 仮組み動画生成完了: {output_video_path}")
 
+        # ── CapCut などで編集できるように「素の合成」も書き出す ──
+        # 字幕（subtitles.srt）・タイトル（title.txt）は焼き込まず、
+        # クリップ＋音声だけの clean_output.mp4 を追加生成する。
+        # 字幕・色・タイトルは CapCut 側で自由に直せる（SRT は CapCut にインポート可能）。
+        clean_path = os.path.join(output_dir, "clean_output.mp4")
+        plain_concat_in = "".join(f"[v{i}]" for i in range(n))
+        filter_clean = (
+            "".join(norm_parts)
+            + f"{plain_concat_in}concat=n={n}:v=1:a=0[vc];"
+        )
+        cmd2 = ["ffmpeg", "-y"]
+        for asset_path in scene_files:
+            if mode == "clip":
+                cmd2 += ["-stream_loop", "-1", "-t", str(scene_duration), "-i", asset_path]
+            else:
+                cmd2 += ["-loop", "1", "-t", str(scene_duration), "-i", asset_path]
+        cmd2 += ["-i", audio_path]
+        cmd2 += [
+            "-filter_complex", filter_clean,
+            "-map", "[vc]",
+            "-map", f"{n}:a",
+            "-c:v", "libx264",
+            "-b:v", str(video_bps),
+            "-maxrate", str(int(video_bps * 1.4)),
+            "-bufsize", str(int(video_bps * 2.5)),
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "96k",
+            "-shortest",
+            clean_path,
+        ]
+        subprocess.run(cmd2, check=True)
+        print(f"🧩 素材版動画生成完了: {clean_path}")
+
         # 4. 生成された仮組み動画を Discord に投稿
         msg = (
             f"🎬 **【進捗通知】仮組み動画（draft_output.mp4）の合成が完了しました！**\n"
@@ -239,6 +274,7 @@ def build_video(output_dir="output"):
             f"- **動画長:** {total_sec:.2f} 秒\n"
             f"- **シーン数:** {n}"
             + (f"\n- **イントロ:** 先頭 {TITLE_INTRO_SEC} 秒にタイトル「{title_text[:20]}」を表示" if use_intro else "")
+            + f"\n- **CapCut編集用:** clean_output.mp4（字幕・タイトルなし）＋ subtitles.srt ＋ title.txt も同梱（Artifacts の zip からDL）"
         )
         sent = send_to_discord(msg, file_path=output_video_path)
         if not sent:
