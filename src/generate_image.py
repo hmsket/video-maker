@@ -32,7 +32,8 @@ def _request_headers():
 
 def _build_url(full_prompt):
     encoded = quote(full_prompt, safe="")
-    params = f"?model={IMAGE_MODEL}&width={IMG_WIDTH}&height={IMG_HEIGHT}"
+    # nologo=true は匿名枠では無視されることがあるが、付けておいて損はない
+    params = f"?model={IMAGE_MODEL}&width={IMG_WIDTH}&height={IMG_HEIGHT}&nologo=true"
     if POLLINATIONS_TOKEN:
         return f"https://gen.pollinations.ai/image/{encoded}{params}", None
     return f"https://image.pollinations.ai/prompt/{encoded}{params}", None

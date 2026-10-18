@@ -96,14 +96,44 @@ jobs:
           python src/prepare_trivia.py
           python src/generate_voice.py
 
-      # 7. 背景画像生成 (Imagen 3)
-      - name: Generate Images with Imagen 3
+      # 6.5 manual-assets の取り込み（clips/images がある場合は output へコピー）
+      - name: Prepare Manual Assets
+        run: |
+          mkdir -p output
+          if [ -d manual-assets/clips ]; then
+            mkdir -p output/clips
+            cp manual-assets/clips/*.mp4 output/clips/ 2>/dev/null || true
+          fi
+          if [ -d manual-assets/images ]; then
+            cp manual-assets/images/* output/ 2>/dev/null || true
+          fi
+          echo "--- output ---"
+          ls -la output || true
+
+      # 6.6 スレッドに添付された素材（clip_XX.mp4 / scene_XX.jpg）を自動取得
+      - name: Fetch Attachments from Discord Thread
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
+        run: |
+          python src/fetch_discord_assets.py
+
+      # 7. 背景画像生成 (manual-assets / Discord添付素材 が存在する場合はスキップ)
+      - name: Generate Images (skip when manual assets exist)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
         run: |
-          python src/generate_image.py
+          if [ -n "$(find manual-assets -type f 2>/dev/null | head -1)" ]; then
+            echo "📄 manual-assets が存在するため自動画像生成をスキップします"
+          elif [ -n "$(find output/clips -type f 2>/dev/null | head -1)" ]; then
+            echo "🎬 Discord 添付のクリップが存在するため自動画像生成をスキップします"
+          elif ls output/scene_*.* >/dev/null 2>&1; then
+            echo "🖼️ Discord 添付の画像が存在するため自動画像生成をスキップします"
+          else
+            python src/generate_image.py
+          fi
 
       # 8. FFmpeg による仮組み動画生成
       - name: Build Draft Video

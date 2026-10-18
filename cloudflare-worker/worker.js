@@ -1,22 +1,32 @@
 // Cloudflare Worker — video-maker / Discord Interaction Handler
 // 機能:
 //   - Ed25519 署名検証
-//   - /fact : Groq でファクトチェック → 不合格なら AI が自動修正 → 再チェック（最大 MAX_AUTO_FIX_ROUNDS 回）
+//   - /fact : Groq でファクトチェック → 不合格なら AI が自動修正 → 再チェック
+//             （自動修正は最大 MAX_AUTO_FIX_ROUNDS 回）
 //             通過したら「🔊 音声・動画を作成する」ボタン付きで確定文面を投稿
 //             完全に通らない場合は「🔁 再チェック」ボタン付きで最終台本を提示
 //   - btn_fetch_trivia : fetch_trivia.yml を起動
 //   - btn_generate_video / btn_genarate_video : generate_video.yml を起動
-//   - btn_fact_recheck : 最新の台本をスタンプ不問で再チェック（AI自動修正ループも走る）
+//   - btn_fact_recheck : 最新の台本をスタンプ不問で再チェック（AI自動修正ループも実行）
 //
-// 注意: この内容を Cloudflare ダッシュボードの Worker エディタ（または wrangler）へ
-//       全体を置き換えて反映してください。
+// ▶ 実行方式（重要）: Cloudflare Workers は「応答を返した後、waitUntil は最長30秒」
+//   で打ち切られる。チェック→修正→再チェックを1回の呼び出し内で待機しながら行うと
+//   30秒で捨てられるため、各ステップ（チェック/修正）を「新しいWorker呼び出し」で実行し、
+//   自分自身の公開URLへ HTTP POST して次段を起動するカスケード方式にしている。
+//   ※ 環境変数 INTERNAL_SECRET（任意のランダム文字列）を必ず設定すること。
+//     これが無いと内部カスケードが拒否され、最初のチェックしか動かない。
 
 const GROQ_MODEL = "openai/gpt-oss-120b";
-const MAX_AUTO_FIX_ROUNDS = 2;   // AI自動修正 → 再チェック の最大回数（合計チェック回数は 1 + この値）
+const MAX_AUTO_FIX_ROUNDS = 2;   // AI自動修正 → 再チェック の最大回数（チェック合計は 1 + この値）
 const META_MARKER = "【生成メタデータ】";
 const MIN_SCRIPT_CHARS = 120;    // AI修正結果の最短文字数（壊れた短文を取り込まない保険）
 const SCRIPT_MAX_CHARS = 340;    // 台本の目標上限（リポジトリ側のルールと同じ基準）
+const WIKI_TEXT_MAX_CHARS = 3000;  // Wikipedia 抜粋の上限（Groq無料枠 TPM=8,000トークン/分 対策）
 const DEBUG = false;             // true にすると対象台本などの詳細ログが出る
+
+let LAST_AUTO_FIX_ERROR = "";    // autoFixScript が失敗した理由（Discord に伝える用）
+
+function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 // Ed25519 署名検証用の軽量ピュアJS実装
 class Ed25519 {
@@ -95,6 +105,20 @@ export default {
   async fetch(request, env, ctx) {
     if (request.method !== 'POST') return new Response('Method Not Allowed', { status: 405 });
 
+    // ── 内部カスケード呼び出し（チェック/修正の段階実行）──────────
+    // Discord からの署名付きリクエストではない。INTERNAL_SECRET で認証する。
+    if (request.headers.get('x-vm-internal')) {
+      if (env.INTERNAL_SECRET && request.headers.get('x-vm-internal') === env.INTERNAL_SECRET) {
+        const state = JSON.parse(await request.text());
+        console.log(`[INTERNAL] accepted step=${state.step} round=${state.round}`);
+        ctx.waitUntil(runFactStep(new URL(request.url).origin, env, state));
+        return new Response('ok');
+      }
+      // ヘッダーはあるのに一致しない → 環境変数の未設定/不一致（ここを知るのが大事）
+      console.error('cascade rejected: INTERNAL_SECRET が未設定または一致しません');
+      return new Response('Forbidden', { status: 403 });
+    }
+
     const signature = request.headers.get('x-signature-ed25519');
     const timestamp = request.headers.get('x-signature-timestamp');
     const bodyText = await request.text();
@@ -118,10 +142,13 @@ export default {
     // 2. スラッシュコマンド実行 (/fact)
     if (interaction.type === 2) {
       if (interaction.data.name === 'fact') {
-        ctx.waitUntil(runGroqFactCheck(channelId, env, { source: 'command' }));
+        // チェック=ステップ1。不合格なら自分自身へのPOSTで「修正→再チェック」を続ける
+        ctx.waitUntil(runFactStep(new URL(request.url).origin, env, {
+          step: 'check', round: 1, selector: 'stamped', channelId: channelId
+        }));
         return jsonResponse({
           type: 4,
-          data: { content: '🛡️ ファクトチェックを実行中... 不合格ならAIの自動修正も試みます（最大2回）。', flags: 64 }
+          data: { content: '🛡️ ファクトチェックを開始しました。不合格なら AI の自動修正→再チェックも続けます。経過はスレッドに投稿されます。', flags: 64 }
         });
       }
     }
@@ -150,10 +177,12 @@ export default {
 
       // 再ファクトチェックボタン（スタンプ不問で最新台本を対象に、AI自動修正ループも実行）
       if (customId === 'btn_fact_recheck') {
-        ctx.waitUntil(runGroqFactCheck(channelId, env, { source: 'button' }));
+        ctx.waitUntil(runFactStep(new URL(request.url).origin, env, {
+          step: 'check', round: 1, selector: 'latest', channelId: channelId
+        }));
         return jsonResponse({
           type: 4,
-          data: { content: '🛡️ 最新の台本を再チェック中...', flags: 64 }
+          data: { content: '🛡️ 最新の台本を再チェック中。経過はスレッドに投稿されます。', flags: 64 }
         });
       }
     }
@@ -208,11 +237,16 @@ function pickLatestUserScript(messages) {
   return "";
 }
 
-// 再チェックボタン用: スタンプ不問で「最新の台本っぽいコードブロック」を探す
+// 再チェックボタン・修正後チェーン用: スタンプ不問で「最新の台本っぽいコードブロック」を探す
+// ※ 台本メッセージは必ずコードブロックで投稿される。❌/⚠️ などのステータス投稿
+//   （コードブロック無し）まで台本と誤認する事故を防ぐため、ここではコードブロック必須。
 function pickLatestScriptAny(messages) {
+  const STATUS_PREFIXES = ["❌", "⚠️", "🔁", "🛡️", "🔍", "🚀"]; // ボットのステータス投稿
   for (const msg of messages) {  // Discord API は新しい順に返す
     const content = msg.content || "";
     if (isMetaMessage(content)) continue;
+    if (STATUS_PREFIXES.some(p => content.trimStart().startsWith(p))) continue;
+    if (!content.includes("```")) continue; // ステータス投稿などを除外
     const text = parseScriptText(content);
     if (text.length > 0 && !text.includes('"video_maker_meta"')) return text;
   }
@@ -264,7 +298,7 @@ async function fetchWikiArticleText(article) {
     }
     const data = await res.json();
     const extract = data?.query?.pages?.[0]?.extract || "";
-    return extract.length > 8000 ? extract.slice(0, 8000) : extract;
+    return extract.length > WIKI_TEXT_MAX_CHARS ? extract.slice(0, WIKI_TEXT_MAX_CHARS) : extract;
   } catch (e) {
     console.error('fetchWikiArticleText exception:', e);
     return "";
@@ -283,87 +317,325 @@ async function fetchMessages(channelId, env) {
   return Array.isArray(data) ? data : null;
 }
 
-// ---------------------------------------------------------------- ファクトチェック & AI自動修正ループ
+// ---------------------------------------------------------------- ファクトチェック ステップ実行（カスケード）
 
-async function runGroqFactCheck(channelId, env, options = {}) {
+// 次ステップを「自分自身へのPOST」で起動する。
+// 子呼び出しが新しい30秒枠を持つので、長い待機をしても安全。
+//
+// ※ 注意: Cloudflare Workers は「自分自身の公開 URL への fetch」を許していない
+//   (無限再帰防止のため 404 になる)。次の2つのどちらかが必要:
+//   a) Service Binding（Settings → Bindings → Service binding, 名前 SELF, 対象=自分自身）
+//   b) 互換フラグ global_fetch_strictly_public（Settings → Compatibility flags で ON）
+//   a) があればそちらを優先し、無ければ b) のフラグ下で公開 URL に POST する。
+async function cascadeStep(origin, env, state) {
+  const headers = {
+    'x-vm-internal': env.INTERNAL_SECRET,
+    'Content-Type': 'application/json'
+  };
+  const init = { method: 'POST', headers, body: JSON.stringify(state) };
+
   try {
-    const messages = await fetchMessages(channelId, env);
+    let res;
+    if (env.SELF && typeof env.SELF.fetch === 'function') {
+      // Service Binding 経由（公開URLを経由しないので最も確実）
+      res = await env.SELF.fetch('https://internal.fact-cascade/', init);
+      console.log(`[CASCADE] via SERVICE_BINDING step=${state.step} round=${state.round} -> HTTP ${res.status}`);
+    } else {
+      res = await fetch(origin + '/', init);
+      console.log(`[CASCADE] via PUBLIC_URL step=${state.step} round=${state.round} -> HTTP ${res.status}`);
+    }
+    return res;
+  } catch (e) {
+    console.error(`[CASCADE] exception: ${e.message}`);
+    return new Response('cascade-error', { status: 500 });
+  }
+}
+
+// ステップ1つをこの呼び出し内で完結させる（必ず30秒内に終わる仕事にする）
+async function runFactStep(origin, env, state) {
+  try {
+    console.log(`[FACT-STEP] start step=${state.step} round=${state.round} selector=${state.selector || "-"}`);
+    const messages = await fetchMessages(state.channelId, env);
     if (!messages) {
-      await postToThread(channelId, env, "⚠️ メッセージ一覧の取得に失敗しました。");
+      console.error(`[FACT-STEP] fetchMessages failed`);
+      await postToThread(state.channelId, env, "⚠️ メッセージ一覧の取得に失敗しました。");
       return;
     }
+    console.log(`[FACT-STEP] messages fetched: ${messages.length}`);
 
-    // チェック対象の台本を決める
-    let targetText = "";
-    if (options.source === 'button') {
-      // 再チェックボタン: スタンプ不問で最新の台本を拾う（ 手動修正返信 / AI修正版 / 確定文面のどこでも ）
-      targetText = pickLatestScriptAny(messages);
-      if (!targetText) targetText = pickScriptByStamp(messages);
+    // 台本の取り出し: チェックの初回のみ選び方を指定可能、修正後は常に「最新の台本」
+    let script = "";
+    if (state.step === 'check' && state.round === 1 && state.selector === 'stamped') {
+      script = pickScriptByStamp(messages) || pickLatestUserScript(messages);
     } else {
-      // /fact コマンド: 従来どおりスタンプ付きメッセージを優先
-      targetText = pickScriptByStamp(messages);
-      if (!targetText) targetText = pickLatestUserScript(messages);
+      script = pickLatestScriptAny(messages) || pickScriptByStamp(messages);
     }
 
-    if (!targetText) {
-      await postToThread(channelId, env,
+    if (!script) {
+      console.error(`[FACT-STEP] script not found (step=${state.step} round=${state.round})`);
+      await postToThread(state.channelId, env,
         "⚠️ 対象メッセージが見つかりませんでした。チェックしたいメッセージにスタンプを付けてから `/fact` を実行してください。");
       return;
     }
 
-    if (DEBUG) console.log(`[FACT] target=${targetText.length} chars (source=${options.source})`);
+    console.log(`[FACT-STEP] script selected: len=${script.length}`);
 
-    // AI修正の根拠にする出典を事前に取得（スレッドにメタデータが無い場合は "" で続行）
-    const wikiText = await fetchWikiArticleText(findMetaArticle(messages));
+    const maxChecks = state.maxRounds || (1 + MAX_AUTO_FIX_ROUNDS);
 
-    // ── チェック → (不合格なら) AI自動修正 → 再チェック のループ ──
-    let script = targetText;
-    const maxChecks = 1 + MAX_AUTO_FIX_ROUNDS;
-
-    for (let round = 1; round <= maxChecks; round++) {
+    if (state.step === 'check') {
+      const wikiText = await fetchWikiArticleText(findMetaArticle(messages));
+      console.log(`[FACT-STEP] groq check start (wiki=${wikiText.length} chars)`);
       const check = await checkWithGroq(script, env.GROQ_API_KEY, wikiText);
+      console.log(`[FACT-STEP] groq check done ok=${check.ok} apiError=${Boolean(check.apiError)}`);
 
       if (check.ok) {
-        const note = round > 1 ? `（🛠️ AI自動修正 ${round - 1} 回目で通過）` : "";
-        await postCheckedMessage(channelId, env, script, note);
+        const note = state.round > 1 ? `（🛠️ AI自動修正 ${state.round - 1} 回目で通過）` : "";
+        await postCheckedMessage(state.channelId, env, script, note);
+        return; // チェーン終了
+      }
+
+      // API 障害時は台本の問題ではなく再試行を促して終了
+      if (check.apiError) {
+        await postToThread(state.channelId, env,
+          `⚠️ **ファクトチェックの実行に失敗しました**（台本の問題ではありません）\n${check.reason}`);
         return;
       }
 
-      // 不合格内容は人間にも見えるように投稿（従来どおり）
-      const isLastRound = round === maxChecks;
-      await postToThread(
-        channelId,
-        env,
-        `❌ **ファクトチェック不合格** (${round}/${maxChecks})\n${check.reason}\n\n` +
-        (isLastRound
-          ? "🛠️ AI自動修正が上限に達しました。下の台本を手で直してスタンプを付けて `/fact` を実行するか、🔁 ボタンでそのまま再チェックできます。"
-          : "🛠️ AIが指摘を踏まえて台本を修正し、再チェックします...")
-      );
+      await postToThread(state.channelId, env, `❌ **ファクトチェック不合格** (${state.round}/${maxChecks})\n${check.reason}`);
 
-      if (isLastRound) break;
+      // 上限に達していなければ「修正」ステップへカスケード
+      if (state.round < maxChecks) {
+        const r = await cascadeStep(origin, env, {
+          step: 'fix',
+          round: state.round,
+          channelId: state.channelId,
+          reason: check.reason
+        });
+        if (!r.ok) {
+          await postToThread(state.channelId, env,
+            "⚠️ AI自動修正ステップの起動に失敗しました（内部認証エラーの可能性）。\nCloudflare の Worker 環境変数 `INTERNAL_SECRET` が設定済み・一致しているか確認してください。");
+        }
+      } else {
+        await postRecheckRequest(state.channelId, env, script);
+      }
+      return;
+    }
 
-      const revised = await autoFixScript(script, check.reason, wikiText, env.GROQ_API_KEY);
+    if (state.step === 'fix') {
+      const wikiText = await fetchWikiArticleText(findMetaArticle(messages));
+      console.log(`[FACT-STEP] groq autofix start (wiki=${wikiText.length} chars)`);
+      const revised = await autoFixScript(script, state.reason || "", wikiText, env.GROQ_API_KEY);
+      console.log(`[FACT-STEP] groq autofix done revised=${Boolean(revised)}${revised ? ` len=${revised.length}` : ""}`);
+
       if (!revised) {
-        await postToThread(channelId, env,
-          "⚠️ AI自動修正に失敗しました。手動で修正し、スタンプを付けて `/fact` を実行してください。");
+        await postToThread(state.channelId, env,
+          `⚠️ AI自動修正に失敗しました（${LAST_AUTO_FIX_ERROR || "原因不明"}）。手動で修正し、スタンプを付けて \`/fact\` を実行してください。`);
+        await postRecheckRequest(state.channelId, env, script);
         return;
       }
 
       // 修正版を投稿。prepare_trivia.py は「スレッド内の最新コードブロック」を台本として採用するため、
       // ここで投稿しておけば、この台本がそのまま動画生成に使われる。
-      await postToThread(
-        channelId,
-        env,
-        `🧪 **AI自動修正版 (${round}/${MAX_AUTO_FIX_ROUNDS})** 違和感があれば、この台本をコードブロックで編集して返信投稿してください。\n\`\`\`\n${revised}\n\`\`\``
-      );
-      script = revised;
-    }
+      await postToThread(state.channelId, env,
+        `🧪 **AI自動修正版 (${state.round}/${MAX_AUTO_FIX_ROUNDS})** 違和感があれば、この台本をコードブロックで編集して返信投稿してください。\n\`\`\`\n${revised}\n\`\`\``);
 
-    // 全ラウンドで不合格だった場合 → 最終台本 + 再チェックボタンを提示
-    await postRecheckRequest(channelId, env, script);
+      // 修正版をチェックステップへ戻す（最新コードブロックが対象になる）
+      const r = await cascadeStep(origin, env, {
+        step: 'check',
+        round: state.round + 1,
+        channelId: state.channelId,
+        selector: 'latest',
+        maxRounds: state.maxRounds
+      });
+      if (!r.ok) {
+        await postToThread(state.channelId, env,
+          "⚠️ 再チェックステップの起動に失敗しました（内部認証エラーの可能性）。\nCloudflare の Worker 環境変数 `INTERNAL_SECRET` が設定済み・一致しているか確認してください。");
+      }
+      return;
+    }
   } catch (err) {
-    console.error("runGroqFactCheck fatal error:", err);
-    await postToThread(channelId, env, `⚠️ ファクトチェック処理中に例外が発生しました:\n\`\`\`${err.message}\`\`\``);
+    console.error("runFactStep fatal error:", err);
+    await postToThread(state.channelId, env,
+      `⚠️ ファクトチェック処理中に例外が発生しました:\n\`\`\`${err.message}\`\`\``);
+  }
+}
+
+// Groq の応答（JSON になっていないことがある）から安全に JSON を取り出す
+function extractJsonObject(reply) {
+  if (!reply) return null;
+  try { return JSON.parse(reply); } catch (e) {}
+  const stripped = String(reply)
+    .replace(/^```[a-z]*\s*\n?/i, "")
+    .replace(/\n?```\s*$/i, "")
+    .trim();
+  try { return JSON.parse(stripped); } catch (e) {}
+  const m = stripped.match(/\{[\s\S]*\}/);
+  if (m) {
+    try { return JSON.parse(m[0]); } catch (e) {}
+  }
+  return null;
+}
+
+// Groq 呼び出しの共通部分（各ステップ=1呼び出しに分かれているため、単一呼び出し内では待機しない）
+async function groqChat(apiKey, systemPrompt, userPrompt, options = {}) {
+  const modes = options.forceJson === false ? [false] : [true, false];
+  let lastError = "";
+
+  for (const useJsonMode of modes) {
+    try {
+      const body = {
+        model: GROQ_MODEL,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: options.temperature ?? 0.2,
+      };
+      if (useJsonMode) body.response_format = { type: "json_object" };
+
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        lastError = `Groq API エラー (${res.status}): ${errText.slice(0, 200)}`;
+        console.error(`groqChat (${useJsonMode ? "json_mode" : "no_format"}):`, lastError);
+        continue; // JSON モードなしで再試行
+      }
+
+      const data = await res.json();
+      if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+        lastError = 'Groq API からの応答フォーマットが不正です。';
+        console.error('Groq Unexpected Response Structure:', JSON.stringify(data));
+        continue;
+      }
+
+      return data.choices[0].message.content;
+    } catch (e) {
+      lastError = `Groq 処理例外: ${e.message}`;
+      console.error("groqChat Exception:", e);
+    }
+  }
+
+  throw new Error(lastError || "不明な Groq エラー");
+}
+
+// 🛡️ Groq によるファクトチェック
+// wikiText がある場合: 「その Wikipedia 原文に裏付けがあるか」を判定基準にする
+// wikiText がない場合: 明らかな歴史的誤実だけを不合格にする（遠慮がちな書き換え要求をしない）
+async function checkWithGroq(text, apiKey, wikiText = "") {
+  const sourceRule = wikiText
+    ? `【判定の手順（重要）】
+- この台本の下に【参考文献】 (Wikipedia 原文) が付いている。**判定はこの文献に基づくこと**。
+- 文献に書かれている出来事・人数・年号・固有名詞・場面描写は「事実」として扱い、これらを理由に不合格にしたり、「記録がない」「詳細は不明」などと指摘してはならない。
+- 不合格にするのは、文献と矛盾する内容、および文献に記載が無い事実の断定だけ。
+- 文献のある台本に「とされています」のようなぼかしを追加するよう要求してはならない（生き生きした表現は台本の価値）。`
+    : `【判定の手順（重要）】
+- 参考文献が提供されていない場合は**非常に寛容に判定する**。明らかに確立した歴史的事実と真っ向から矛盾する断定だけを不合格にする。
+- 細部の数字・描写に「根拠が不明」といった指摘をしない（資料は提供されていないため、確認できないこと自体は許容する）。
+- 「とされています」に書き換える退屈な修正を要求してはならない。`;
+
+  const systemPrompt = `あなたはYouTube Shorts等の歴史雑学動画のファクトチェック担当者です。
+動画台本として「エンタメ性と史実のバランス」を判定してください。台本の面白さは重要な価値であり、あなたの仕事は「明らかな誤実の検出」です。
+
+${sourceRule}
+
+【合格（ok: true）とする基準】
+- あなたが参照した資料（または既知の明確な歴史的事実）と矛盾する内容が無いこと。
+- 通説や説のひとつとして存在していれば、ある程度の強調表現やキャッチーな言い回しは許容する。
+
+【不合格（ok: false）とする基準】
+- 資料（または既知の明確な歴史的事実）と明確に矛盾する内容がある場合。
+- 現代の歴史学で完全に否定されている都市伝説を「絶対の史実」として断定している場合。
+- 根拠のない数字や事実を「捏造」と断定するのは、参照した資料がある場合に限る。
+
+回答は必ず以下のJSONフォーマットのみで返してください：
+{"ok": true, "reason": ""}
+または
+{"ok": false, "reason": "不合格の具体的な理由と、どう修正すれば通るかの簡単なアドバイス"}`;
+
+  const userPrompt = wikiText
+    ? `【検証対象の台本】\n${text}\n\n【参考文献 (Wikipedia 記事からの抜粋)】\n${wikiText}`
+    : `【検証対象の台本】\n${text}`;
+
+  try {
+    const reply = await groqChat(apiKey, systemPrompt, userPrompt);
+    const parsed = extractJsonObject(reply);
+    if (parsed && typeof parsed === "object") {
+      return { ok: Boolean(parsed.ok), reason: parsed.reason || "" };
+    }
+    console.error('checkWithGroq: JSON 抽出失敗:', String(reply).slice(0, 200));
+    return { ok: false, apiError: true, reason: "Groq 応答から判定結果を取り出せませんでした。" };
+  } catch (e) {
+    return {
+      ok: false,
+      apiError: true, // AI修正を走らせるべきでない「API障害」のマーク
+      reason: `${e.message}\n（Groq が一時的に不調の可能性があります。少し待ってから 🔁 再チェックを実行してください）`
+    };
+  }
+}
+
+// 🛠️ AI修正: 指摘を解消する修正版台本を生成する
+// 方針: 「安全側に倒して全部ぼかす」ではなく、原文に裏付けのある生きた表現は保持する
+const AUTO_FIX_SYSTEM_PROMPT = `あなたはYouTube Shorts向けの歴史雑学台本のファクトチェック指摘を解消する台本作家です。
+最重要目標は「ファクトチェックに通ること」と、忘れてはならない「おもしろい物語のままにしておくこと」です。
+指摘された部分だけを書き換え、完成版台本を1つだけ出力してください。
+
+【最重要の方針（必ず守る）】
+- 元の台本の面白さ・テンポ・問いかけ・感情描写・具体的数字は、指摘と抵触する部分を除き**そのまま保持する**。
+- 文面を整えるための全面改稿はしない。「とされています」「言われます」で全体を包む、無個性な文に書き換えることは禁止。
+- 【資料】に裏付けがある情報（人数・年号・固有名詞・出来事・場面描写）は、ぼかしを追加せず生のまま使ってよい（むしろ使うべき）。
+- 直すのは次の2種類だけ:
+  1. 【資料】と矛盾・あるいは【資料】に根拠がないのに断定している部分 → 資料の内容に合わせるか、最小限のぼかしにする
+  2. ファクトチェックの指摘が具体的に指している文 → その文だけ直す
+- 資料が「（なし）」の場合は、明らかな歴史的誤実のみを最小限修正し、それ以外は元の台本をほぼそのまま出力する。
+
+【形式ルール】
+- 「です・ます調」の親しみやすいトーンを維持する。
+- 全体は300〜340文字を維持する。1文は35文字以内。起承転結の構成は崩さない。
+- 新しい事実・数字を捏造しない（【資料】内の情報の範囲でのみ修正）。
+- 出力は台本本文のみ。前置き・後書き・引用符・コードブロックは付けない。`;
+
+async function autoFixScript(scriptText, feedback, wikiText, apiKey) {
+  LAST_AUTO_FIX_ERROR = "";
+  const userPrompt = [
+    "【修正対象の台本】",
+    scriptText,
+    "",
+    "【ファクトチェックの指摘】",
+    feedback,
+    "",
+    "【参考資料 (Wikipedia 記事からの抜粋)】",
+    wikiText || "（なし）",
+    "",
+    "修正後の台本文のみを出力してください。",
+  ].join("\n");
+
+  try {
+    let text = await groqChat(apiKey, AUTO_FIX_SYSTEM_PROMPT, userPrompt, { forceJson: false });
+    text = text.trim();
+
+    // 念のため前後のコードブロックや前置きを剥ぐ
+    text = text.replace(/^```[a-z]*\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+    text = text.replace(/^(修正後の台本|台本)[:：]\s*/i, "").trim();
+
+    // 台本として明らかに破綻している出力は取り込まない保険
+    if (text.length < MIN_SCRIPT_CHARS || text.length > SCRIPT_MAX_CHARS + 200) {
+      LAST_AUTO_FIX_ERROR = `出力の長さが不自然 (${text.length}文字)`;
+      console.error(`autoFixScript: ${LAST_AUTO_FIX_ERROR}`);
+      return null;
+    }
+    return text;
+  } catch (e) {
+    LAST_AUTO_FIX_ERROR = String(e.message).slice(0, 200);
+    console.error("autoFixScript exception:", e);
+    return null;
   }
 }
 
@@ -414,168 +686,6 @@ function postRecheckRequest(channelId, env, script) {
       }]
     })
   });
-}
-
-// 🛠️ AI修正: 指摘を解消する修正版台本を生成する
-// 方針: 「安全側に倒して全部ぼかす」ではなく、原文に裏付けのある生きた表現は保持する
-const AUTO_FIX_SYSTEM_PROMPT = `あなたはYouTube Shorts向けの歴史雑学台本のファクトチェック指摘を解消する台本作家です。
-最重要目標は「ファクトチェックに通ること」と、忘れてはならない「おもしろい物語のままにしておくこと」です。
-指摘された部分だけを書き換え、完成版台本を1つだけ出力してください。
-
-【最重要の方針（必ず守る）】
-- 元の台本の面白さ・テンポ・問いかけ・感情描写・具体的数字は、指摘と抵触する部分を除き**そのまま保持する**。
-- 文面を整えるための全面改稿はしない。「とされています」「言われます」で全体を包む没個性的な文に書き換えることは禁止。
-- 【資料】に裏付けがある情報（人数・年号・固有名詞・出来事・場面描写）は、ぼかしを追加せず生のまま使ってよい（むしろ使うべき）。
-- 直すのは次の2種類だけ:
-  1. 【資料】と矛盾・あるいは【資料】に根拠がないのに断定している部分 → 資料の内容に合わせるか、最小限のぼかしにする
-  2. ファクトチェックの指摘が具体的に指している文 → その文だけ直す
-- 資料が「（なし）」の場合は、明らかな歴史的誤実のみを最小限修正し、それ以外は元の台本をほぼそのまま出力する。
-
-【形式ルール】
-- 「です・ます調」の親しみやすいトーンを維持する。
-- 全体は300〜340文字を維持する。1文は35文字以内。起承転結の構成は崩さない。
-- 新しい事実・数字を捏造しない（【資料】内の情報の範囲でのみ修正）。
-- 出力は台本本文のみ。前置き・後書き・引用符・コードブロックは付けない。`;
-
-async function autoFixScript(scriptText, feedback, wikiText, apiKey) {
-  const userPrompt = [
-    "【修正対象の台本】",
-    scriptText,
-    "",
-    "【ファクトチェックの指摘】",
-    feedback,
-    "",
-    "【参考資料 (Wikipedia 記事からの抜粋)】",
-    wikiText || "（なし）",
-    "",
-    "修正後の台本文のみを出力してください。",
-  ].join("\n");
-
-  try {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        messages: [
-          { role: 'system', content: AUTO_FIX_SYSTEM_PROMPT },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.2
-      })
-    });
-
-    if (!res.ok) {
-      console.error(`autoFixScript: Groq HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
-      return null;
-    }
-
-    const data = await res.json();
-    let text = (data?.choices?.[0]?.message?.content || "").trim();
-    if (!text) {
-      console.error('autoFixScript: 空の応答');
-      return null;
-    }
-
-    // 念のため前後のコードブロックや前置きを剥ぐ
-    text = text.replace(/^```[a-z]*\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
-    text = text.replace(/^(修正後の台本|台本)[:：]\s*/i, "").trim();
-
-    // 台本として明らかに破綻している出力は取り込まない保険
-    if (text.length < MIN_SCRIPT_CHARS || text.length > SCRIPT_MAX_CHARS + 200) {
-      console.error(`autoFixScript: 出力の長さが不自然です (${text.length}文字)`);
-      return null;
-    }
-    return text;
-  } catch (e) {
-    console.error("autoFixScript exception:", e);
-    return null;
-  }
-}
-
-// 🛡️ Groq によるファクトチェック
-// wikiText がある場合: 「その Wikipedia 原文に裏付けがあるか」を判定基準にする
-// wikiText がない場合: 明らかな歴史的誤実だけを不合格にする（遠慮がちな書き換え要求をしない）
-async function checkWithGroq(text, apiKey, wikiText = "") {
-  const sourceRule = wikiText
-    ? `【判定の手順（重要）】
-- この台本の下に【参考文献】 (Wikipedia 原文) が付いている。**判定はこの文献に基づくこと**。
-- 文献に書かれている出来事・人数・年号・固有名詞・場面描写は「事実」として扱い、これらを理由に不合格にしたり、「記録がない」「詳細は不明」などと指摘してはならない。
-- 不合格にするのは、文献と矛盾する内容、および文献に記載が無い事実の断定だけ。
-- 文献のある台本に「とされています」のようなぼかしを追加するよう要求してはならない（生き生きした表現は台本の価値）。`
-    : `【判定の手順（重要）】
-- 参考文献が提供されていない場合は**非常に寛容に判定する**。明らかに確立した歴史的事実と真っ向から矛盾する断定だけを不合格にする。
-- 細部の数字・描写に「根拠が不明」といった指摘をしない（資料は提供されていないため、確認できないこと自体は許容する）。
-- 「とされています」に書き換える退屈な修正を要求してはならない。`;
-
-  const systemPrompt = `あなたはYouTube Shorts等の歴史雑学動画のファクトチェック担当者です。
-動画台本として「エンタメ性と史実のバランス」を判定してください。台本の面白さは重要な価値であり、あなたの仕事は「明らかな誤実の検出」です。
-
-${sourceRule}
-
-【合格（ok: true）とする基準】
-- あなたが参照した資料（または既知の明確な歴史的事実）と矛盾する内容が無いこと。
-- 通説や説のひとつとして存在していれば、ある程度の強調表現やキャッチーな言い回しは許容する。
-- 「〜と伝えられている」「〜という説もある」といったボカし表現で成立している場合は合格とする。
-
-【不合格（ok: false）とする基準】
-- 資料（または既知の明確な歴史的事実）と明確に矛盾する内容がある場合。
-- 現代の歴史学で完全に否定されている都市伝説を「絶対の史実」として断定している場合。
-- 根拠のない数字や事実を「捏造」と断定するのは、参照した資料がある場合に限る。
-
-回答は必ず以下のJSONフォーマットのみで返してください：
-{"ok": true, "reason": ""}
-または
-{"ok": false, "reason": "不合格の具体的な理由と、どう修正すれば通るかの簡単なアドバイス"}`;
-
-  const userPrompt = wikiText
-    ? `【検証対象の台本】\n${text}\n\n【参考文献 (Wikipedia 記事からの抜粋)】\n${wikiText}`
-    : `【検証対象の台本】\n${text}`;
-
-  try {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.2,
-        response_format: { type: "json_object" }
-      })
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      console.error('Groq API Error Response:', JSON.stringify(data));
-      return { ok: false, reason: `Groq API エラー (${res.status}): ${data.error?.message || '不明なエラー'}` };
-    }
-
-    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-      console.error('Groq Unexpected Response Structure:', JSON.stringify(data));
-      return { ok: false, reason: 'Groq API からの応答フォーマットが不正です。' };
-    }
-
-    const reply = data.choices[0].message.content;
-    const parsed = JSON.parse(reply);
-    return {
-      ok: Boolean(parsed.ok),
-      reason: parsed.reason || ""
-    };
-
-  } catch (e) {
-    console.error("checkWithGroq Exception:", e);
-    return { ok: false, reason: `Groqチェック処理例外: ${e.message}` };
-  }
 }
 
 async function postToThread(channelId, env, content) {
