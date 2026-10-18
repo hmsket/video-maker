@@ -44,6 +44,8 @@ jobs:
                 || echo "⚠️ 取得失敗（スキップ）: $url"
             done
             sudo fc-cache -f >/dev/null
+            echo "--- fontconfig に登録されたカスタムフォント ---"
+            fc-list | grep -i -E "custom|shippori" || echo "⚠️ カスタムフォントが fontconfig に認識されていません"
           else
             echo "ℹ️ EXTRA_FONT_URLS 未設定のため、追加フォントなしで続行します"
           fi
@@ -167,6 +169,12 @@ jobs:
           TITLE_INTRO_SEC: ${{ vars.TITLE_INTRO_SEC || '3' }}
           UPLOAD_TARGET_MB: ${{ vars.UPLOAD_TARGET_MB || '7.5' }}
         run: |
+          echo "━━ フォント設定の確認 ━━"
+          echo "SUB_FONT_NAME=$SUB_FONT_NAME"
+          echo "SUB_FONT_FILE=$SUB_FONT_FILE"
+          echo "TITLE_FONT_FILE=$TITLE_FONT_FILE"
+          echo "SUB_FONT_SIZE=$SUB_FONT_SIZE"
+          fc-list | grep -i "shippori" || echo "(Shippori 関連フォントが fontconfig に無い)"
           python src/generate_video.py
 
       # 9. 成果物を Zip にまとめて Artifacts へ保存

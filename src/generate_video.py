@@ -132,6 +132,8 @@ def build_video(output_dir="output"):
         return
 
     # ── 素材の決定: 動画クリップがあれば優先、無ければ静止画 ──
+    print(f"🔤 フォント設定: 字幕 FontName={SUB_FONT_NAME} / size={SUB_FONT_SIZE}")
+    print(f"🔤 フォント設定: タイトル file={TITLE_FONT_FILE} / size={TITLE_FONT_SIZE}")
     clip_files = collect_clip_files(output_dir)
     mode = "clip" if clip_files else "image"
     if clip_files:
