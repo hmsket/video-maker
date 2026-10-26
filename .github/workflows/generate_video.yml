@@ -1,4 +1,4 @@
-name: Generate Video Pipeline
+﻿name: Generate Video Pipeline
 
 on:
   workflow_dispatch:
@@ -7,6 +7,11 @@ on:
         description: 'Discord Thread ID'
         required: false
         default: ''
+      assets_only:
+        description: 'AviUtl/CapCut編集用の素材だけ作成（画像生成・動画合成をスキップ）'
+        type: boolean
+        required: false
+        default: true
   repository_dispatch:
     types: [generate_video]
 
@@ -14,6 +19,9 @@ jobs:
   build-media:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # ボタン実行（repository_dispatch）は必ず素材のみ。workflow_dispatch はチェックボックスで選択
+      ASSETS_ONLY: ${{ (github.event_name == 'repository_dispatch' || inputs.assets_only) && 'true' || 'false' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -71,20 +79,20 @@ jobs:
       - name: Load cached Docker image
         run: |
           if [ -f /tmp/docker-cache/aivisspeech.tar ]; then
-            echo "📦 キャッシュから Docker イメージをロード中..."
+            echo "📂 キャッシュから Docker イメージをロード中..."
             docker load < /tmp/docker-cache/aivisspeech.tar
           fi
 
-      # 5. AivisSpeech Engine (Docker) 起動 & ヘルスチェック待機
+      # 5. AivisSpeech Engine (Docker) 起動 & ヘルスチェック処理
       - name: Start AivisSpeech Engine
         run: |
           mkdir -p ~/.local/share/AivisSpeech-Engine
           sudo chown -R 1000:1000 ~/.local/share/AivisSpeech-Engine
-          
+
           docker run -d -p 10101:10101 \
             -v ~/.local/share/AivisSpeech-Engine:/home/user/.local/share/AivisSpeech-Engine-Dev \
             ghcr.io/aivis-project/aivisspeech-engine:cpu-latest
-          
+
           # 初回実行時のみ次回用にキャッシュを保存
           if [ ! -f /tmp/docker-cache/aivisspeech.tar ]; then
             mkdir -p /tmp/docker-cache
@@ -101,12 +109,12 @@ jobs:
             echo "Waiting... ($i/60)"
             sleep 2
           done
-          
+
           echo "❌ Timed out waiting for AivisSpeech Engine."
           docker logs $(docker ps -lq)
           exit 1
 
-      # 6. 台本データの準備（Discord取得 or テスト生成）＆ 音声生成
+      # 6. 基本データの処理（Discord取得 or テスト実行）＋ 音声生成
       - name: Run Voice & Subtitle Generation
         env:
           AIVIS_URL: "http://127.0.0.1:10101"
@@ -119,6 +127,7 @@ jobs:
 
       # 6.5 manual-assets の取り込み（clips/images がある場合は output へコピー）
       - name: Prepare Manual Assets
+        if: env.ASSETS_ONLY != 'true'
         run: |
           mkdir -p output
           if [ -d manual-assets/clips ]; then
@@ -133,6 +142,7 @@ jobs:
 
       # 6.6 スレッドに添付された素材（clip_XX.mp4 / scene_XX.jpg）を自動取得
       - name: Fetch Attachments from Discord Thread
+        if: env.ASSETS_ONLY != 'true'
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
@@ -141,6 +151,7 @@ jobs:
 
       # 7. 背景画像生成 (manual-assets / Discord添付素材 が存在する場合はスキップ)
       - name: Generate Images (skip when manual assets exist)
+        if: env.ASSETS_ONLY != 'true'
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
@@ -158,6 +169,7 @@ jobs:
 
       # 8. FFmpeg による仮組み動画生成
       - name: Build Draft Video
+        if: env.ASSETS_ONLY != 'true'
         env:
           THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
@@ -167,6 +179,11 @@ jobs:
           TITLE_FONT_FILE: ${{ vars.TITLE_FONT_FILE }}
           TITLE_FONT_SIZE: ${{ vars.TITLE_FONT_SIZE || '72' }}
           TITLE_INTRO_SEC: ${{ vars.TITLE_INTRO_SEC || '3' }}
+          TITLE_LINE_MAX_CHARS: ${{ vars.TITLE_LINE_MAX_CHARS || '12' }}
+          TITLE_BG_DARK: ${{ vars.TITLE_BG_DARK || '0.5' }}
+          SUB_BOX_OPACITY: ${{ vars.SUB_BOX_OPACITY || '0.6' }}
+          SUB_BOX_PAD: ${{ vars.SUB_BOX_PAD || '10' }}
+          SUB_MARGIN_V: ${{ vars.SUB_MARGIN_V || '62' }}
           UPLOAD_TARGET_MB: ${{ vars.UPLOAD_TARGET_MB || '7.5' }}
         run: |
           echo "━━ フォント設定の確認 ━━"
@@ -177,19 +194,35 @@ jobs:
           fc-list | grep -i "shippori" || echo "(Shippori 関連フォントが fontconfig に無い)"
           python src/generate_video.py
 
-      # 9. 成果物を Zip にまとめて Artifacts へ保存
+      # 9. AviUtl 編集用の素材パッケージ（assets_only でも必ず実行）
+      - name: Export AviUtl Asset Package
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
+        run: |
+          python src/export_assets.py
+
+      - name: Upload AviUtl Assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: aviutl-assets
+          path: aviutl_assets.zip
+
+      # 10. 成果物を Zip にまとめて Artifacts へ保存（動画合成がある場合のみ）
       - name: Create Zip Artifact
+        if: env.ASSETS_ONLY != 'true'
         run: |
           cd output
           zip -r ../video_assets.zip ./*
 
       - name: Upload Video Artifacts
+        if: env.ASSETS_ONLY != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: video-draft-assets
           path: video_assets.zip
 
-      # 10. 失敗時の通知（どこまで進んだか Discord で分かるように）
+      # 11. 失敗時の通知（どこまで進んだか Discord で分かるように）
       - name: Notify Failure
         if: failure()
         env:
@@ -198,5 +231,5 @@ jobs:
         run: |
           python -c "
           from discord_notifier import send_to_discord
-          send_to_discord('❌ **【エラー通知】動画作成パイプラインが途中で失敗しました。**\nGitHub Actions のログを確認してください（失敗したステップ名＋最後の20行を共有してください）。')
+          send_to_discord('❌ **【エラー通知】素材作成パイプラインが途中で失敗しました。**\nGitHub Actions のログを確認してください（失敗したステップ名＋最後の20行を共有してください）。')
           "

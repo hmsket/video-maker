@@ -158,7 +158,7 @@ export default {
         ctx.waitUntil(triggerGitHubWorkflow(env, 'generate_video.yml', { thread_id: channelId }));
         return jsonResponse({
           type: 4,
-          data: { content: '🎬 動画作成を開始しました！スレッドに添付された動画/画像があればそれを素材に、無ければ自動生成します。完成までお待ちください。', flags: 64 }
+          data: { content: '📦 素材作成（音声・台本・字幕・画像プロンプト）を開始しました！完了したらスレッドに通知します。', flags: 64 }
         });
       }
     }
@@ -181,7 +181,7 @@ export default {
         ctx.waitUntil(triggerGitHubWorkflow(env, 'generate_video.yml', { thread_id: channelId }));
         return jsonResponse({
           type: 4,
-          data: { content: '🚀 動画作成ワークフロー (generate_video.yml) を起動しました！完了までお待ちください。', flags: 64 }
+          data: { content: '🚀 素材作成ワークフロー (generate_video.yml / assets_only) を起動しました！完了したらスレッドにお知らせします。', flags: 64 }
         });
       }
 
@@ -665,7 +665,7 @@ function postCheckedMessage(channelId, env, script, note = "") {
         components: [{
           type: 2,
           style: 3,
-          label: "🔊 音声・動画を作成する",
+          label: "📦 素材（音声・台本・プロンプト）を作成する",
           custom_id: "btn_genarate_video"
         }]
       }]

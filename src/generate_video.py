@@ -6,6 +6,7 @@ import subprocess
 from pydub import AudioSegment
 
 from discord_notifier import send_to_discord
+from generate_voice import wrap_japanese
 
 WIDTH = int(os.environ.get("VIDEO_WIDTH", "1080"))
 HEIGHT = int(os.environ.get("VIDEO_HEIGHT", "1920"))
@@ -22,6 +23,12 @@ TITLE_FONT_FILE = os.environ.get("TITLE_FONT_FILE") or FONT_FILE
 # タイトル表示（イントロ）: 最初の TITLE_INTRO_SEC 秒、1つ目の素材をぼかしてタイトルを出す
 TITLE_INTRO_SEC = float(os.environ.get("TITLE_INTRO_SEC") or "3")
 TITLE_FONT_SIZE = int(os.environ.get("TITLE_FONT_SIZE") or "72")
+# ── CapCut 風の見た目の調整 ──────────────────────────────────────────
+TITLE_LINE_MAX_CHARS = int(os.environ.get("TITLE_LINE_MAX_CHARS") or "12")  # タイトルの折返し文字数
+TITLE_BG_DARK = float(os.environ.get("TITLE_BG_DARK") or "0.5")      # イントロの暗幕の強さ (0-1)
+SUB_BOX_OPACITY = float(os.environ.get("SUB_BOX_OPACITY") or "0.6")  # 字幕の黒箱の濃さ (0-1, 1=不透明黒)
+SUB_BOX_PAD = int(os.environ.get("SUB_BOX_PAD") or "10")             # 黒箱の内側の余白（ASSのOutline値）
+SUB_MARGIN_V = int(os.environ.get("SUB_MARGIN_V") or "62")           # 字幕の下位置（ASS基準座標）
 VIDEO_FPS = int(os.environ.get("VIDEO_FPS", "30"))
 
 
@@ -108,16 +115,30 @@ def _norm_chain(label, fps_norm, extra=""):
 
 
 def _title_intro_filter(fps_norm, title_file):
-    """イントロ(segment): ぼかし + 暗め + 中央にタイトル文字。"""
+    """イントロsegment: ぼかし + 暗め + 中央にタイトル文字（CapCut風: 白文字+影、箱なし）。"""
     return (
         f"boxblur=luma_radius=24:luma_power=2,"
         f"eq=brightness=-0.08,"
-        f"drawbox=x=0:y=0:w=iw:h=ih:color=black@0.35:t=fill,"
+        f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{TITLE_BG_DARK}:t=fill,"
         f"drawtext=fontfile={TITLE_FONT_FILE}:textfile={title_file}"
         f":fontsize={TITLE_FONT_SIZE}:fontcolor=white"
-        f":box=1:boxcolor=black@0.45:boxborderw=24"
+        f":line_spacing={int(TITLE_FONT_SIZE * 0.35)}"
+        f":shadowcolor=black@0.7:shadowx=2:shadowy=2"
         f":x=(w-text_w)/2:y=(h-text_h)/2,"
         f"{fps_norm},trim=0:{TITLE_INTRO_SEC:.3f},setpts=PTS-STARTPTS"
+    )
+
+
+def _subtitle_style():
+    """ASS force_style: 半透明黒箱＋白文字・下中央寄せ（CapCut風）。"""
+    # ASS の alpha バイト: 00=不透明 / FF=完全透明
+    alpha = int(round(255 * (1 - SUB_BOX_OPACITY)))
+    return (
+        f"FontName={SUB_FONT_NAME},FontSize={SUB_FONT_SIZE},"
+        f"PrimaryColour=&HFFFFFF&,"
+        f"BorderStyle=4,BackColour=&H{alpha:02X}000000&,"
+        f"Outline={SUB_BOX_PAD},Shadow=0,"
+        f"Alignment=2,MarginV={SUB_MARGIN_V}"
     )
 
 
@@ -157,8 +178,9 @@ def build_video(output_dir="output"):
     use_intro = bool(title) and scene_duration > TITLE_INTRO_SEC + 0.5
     title_text = title or "歴史雑学ショート"
     title_file = os.path.join(output_dir, "title.txt").replace("\\", "/").replace(":", "\\:")
+    # タイトルは日本語として自然な位置で折り返してから使う（CapCut風の2行センタリング）
     with open(os.path.join(output_dir, "title.txt"), "w", encoding="utf-8") as f:
-        f.write(title_text)
+        f.write(wrap_japanese(title_text, TITLE_LINE_MAX_CHARS))
 
     # ── FFmpeg 入力コマンド構築 ──
     cmd = ["ffmpeg", "-y"]
@@ -210,7 +232,7 @@ def build_video(output_dir="output"):
         "".join(norm_parts)
         + "".join(intro_parts)
         + f"{concat_in}concat=n={len(labels)}:v=1:a=0[v];"
-        + f"[v]subtitles={clean_srt_path}:force_style='FontName={SUB_FONT_NAME},FontSize={SUB_FONT_SIZE},Alignment=2'[outv]"
+        + f"[v]subtitles={clean_srt_path}:force_style='{_subtitle_style()}'[outv]"
     )
 
     cmd += [
