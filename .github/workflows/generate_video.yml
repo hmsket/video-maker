@@ -12,8 +12,16 @@ on:
         type: boolean
         required: false
         default: true
+      build_from_saved:
+        description: '保存済み素材＋スレッド添付クリップで ffmpeg 合成のみ実行（/video 用）'
+        type: boolean
+        required: false
+        default: false
   repository_dispatch:
-    types: [generate_video]
+    types: [build_video]
+
+permissions:
+  contents: write  # 素材をリポジトリにコミットするため
 
 jobs:
   build-media:
@@ -22,6 +30,9 @@ jobs:
     env:
       # ボタン実行（repository_dispatch）は必ず素材のみ。workflow_dispatch はチェックボックスで選択
       ASSETS_ONLY: ${{ (github.event_name == 'repository_dispatch' || inputs.assets_only) && 'true' || 'false' }}
+      # build_video ディスパッチ（/video コマンド等）: 保存済み素材 + 添付クリップで ffmpeg 合成だけ行う
+      IS_BUILD: ${{ ((github.event_name == 'repository_dispatch' && github.event.action == 'build_video') || inputs.build_from_saved) && 'true' || 'false' }}
+      THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -58,8 +69,9 @@ jobs:
             echo "ℹ️ EXTRA_FONT_URLS 未設定のため、追加フォントなしで続行します"
           fi
 
-      # 2. GHCR ログイン (AivisSpeech イメージ取得用の認証)
+      # 2. GHCR ログイン / Docker / 音声生成は build_video（合成のみ）モードではスキップ
       - name: Log in to GitHub Container Registry (GHCR)
+        if: env.IS_BUILD != 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -68,6 +80,7 @@ jobs:
 
       # 3. Docker キャッシュの復元 / 保存
       - name: Cache Docker Images
+        if: env.IS_BUILD != 'true'
         uses: actions/cache@v4
         with:
           path: /tmp/docker-cache
@@ -77,6 +90,7 @@ jobs:
 
       # 4. キャッシュが存在すればロード
       - name: Load cached Docker image
+        if: env.IS_BUILD != 'true'
         run: |
           if [ -f /tmp/docker-cache/aivisspeech.tar ]; then
             echo "📂 キャッシュから Docker イメージをロード中..."
@@ -85,6 +99,7 @@ jobs:
 
       # 5. AivisSpeech Engine (Docker) 起動 & ヘルスチェック処理
       - name: Start AivisSpeech Engine
+        if: env.IS_BUILD != 'true'
         run: |
           mkdir -p ~/.local/share/AivisSpeech-Engine
           sudo chown -R 1000:1000 ~/.local/share/AivisSpeech-Engine
@@ -114,8 +129,37 @@ jobs:
           docker logs $(docker ps -lq)
           exit 1
 
-      # 6. 基本データの処理（Discord取得 or テスト実行）＋ 音声生成
+      # 5.5 合成モード: 前回の素材実行で保存した台本・音声・字幕を output へ復元
+      - name: Restore Saved Assets (build mode)
+        if: env.IS_BUILD == 'true'
+        run: |
+          mkdir -p output
+          if [ ! -d "assets/${THREAD_ID}" ]; then
+            echo "❌ assets/${THREAD_ID} が存在しません。先に素材作成（📦 ボタン）を実行してください"
+            exit 1
+          fi
+          cp assets/${THREAD_ID}/* output/
+          echo "--- 復元した素材 ---"
+          ls -la output
+
+      # 5.6 素材モード: 出来上がった音声・字幕・台本をリポジトリに保存（合成モードで再利用するため）
+      - name: Save Assets to Repo
+        if: env.ASSETS_ONLY == 'true' && env.IS_BUILD != 'true' && env.THREAD_ID != ''
+        run: |
+          python src/save_assets.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets
+          if git diff --cached --quiet; then
+            echo "保存する新規素材はありません"
+          else
+            git commit -m "assets: thread ${THREAD_ID}"
+            git push
+          fi
+
+      # 6. 基本データの処理（Discord取得 or テスト実行）＋ 音声生成（合成モードではスキップ）
       - name: Run Voice & Subtitle Generation
+        if: env.IS_BUILD != 'true'
         env:
           AIVIS_URL: "http://127.0.0.1:10101"
           THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
@@ -142,7 +186,7 @@ jobs:
 
       # 6.6 スレッドに添付された素材（clip_XX.mp4 / scene_XX.jpg）を自動取得
       - name: Fetch Attachments from Discord Thread
-        if: env.ASSETS_ONLY != 'true'
+        if: env.ASSETS_ONLY != 'true' || env.IS_BUILD == 'true'
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
@@ -169,7 +213,7 @@ jobs:
 
       # 8. FFmpeg による仮組み動画生成
       - name: Build Draft Video
-        if: env.ASSETS_ONLY != 'true'
+        if: env.ASSETS_ONLY != 'true' || env.IS_BUILD == 'true'
         env:
           THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
@@ -194,8 +238,9 @@ jobs:
           fc-list | grep -i "shippori" || echo "(Shippori 関連フォントが fontconfig に無い)"
           python src/generate_video.py
 
-      # 9. AviUtl 編集用の素材パッケージ（assets_only でも必ず実行）
+      # 9. AviUtl 編集用の素材パッケージ（assets_only でも必ず実行。合成モードでは不要）
       - name: Export AviUtl Asset Package
+        if: env.IS_BUILD != 'true'
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           THREAD_ID: ${{ github.event.inputs.thread_id || github.event.client_payload.thread_id }}
@@ -203,6 +248,7 @@ jobs:
           python src/export_assets.py
 
       - name: Upload AviUtl Assets
+        if: env.IS_BUILD != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: aviutl-assets
@@ -210,13 +256,13 @@ jobs:
 
       # 10. 成果物を Zip にまとめて Artifacts へ保存（動画合成がある場合のみ）
       - name: Create Zip Artifact
-        if: env.ASSETS_ONLY != 'true'
+        if: env.ASSETS_ONLY != 'true' || env.IS_BUILD == 'true'
         run: |
           cd output
           zip -r ../video_assets.zip ./*
 
       - name: Upload Video Artifacts
-        if: env.ASSETS_ONLY != 'true'
+        if: env.ASSETS_ONLY != 'true' || env.IS_BUILD == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: video-draft-assets

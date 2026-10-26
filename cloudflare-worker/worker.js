@@ -77,6 +77,9 @@ async function triggerGitHubWorkflow(env, workflowFile = 'generate_video.yml', p
     requestBody.inputs = {
       thread_id: String(payload.thread_id)
     };
+    if (payload.build_from_saved) {
+      requestBody.inputs.build_from_saved = true;
+    }
   }
 
   try {
@@ -155,10 +158,10 @@ export default {
       // /video: いつでも動画作成ワークフローを起動（ボタンが見つからないときの入口）
       // スレッドに動画クリップ等の添付があればそれを使い、無ければ自動画像生成にフォールバックする
       if (interaction.data.name === 'video') {
-        ctx.waitUntil(triggerGitHubWorkflow(env, 'generate_video.yml', { thread_id: channelId }));
+        ctx.waitUntil(triggerGitHubWorkflow(env, 'generate_video.yml', { thread_id: channelId, build_from_saved: true }));
         return jsonResponse({
           type: 4,
-          data: { content: '📦 素材作成（音声・台本・字幕・画像プロンプト）を開始しました！完了したらスレッドに通知します。', flags: 64 }
+          data: { content: '🎬 保存済みの音声・字幕＋スレッドに添付された動画/画像で ffmpeg 合成を開始しました！完了したらスレッドに通知します。', flags: 64 }
         });
       }
     }
