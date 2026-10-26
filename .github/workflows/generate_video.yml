@@ -142,21 +142,6 @@ jobs:
           echo "--- 復元した素材 ---"
           ls -la output
 
-      # 5.6 素材モード: 出来上がった音声・字幕・台本をリポジトリに保存（合成モードで再利用するため）
-      - name: Save Assets to Repo
-        if: env.ASSETS_ONLY == 'true' && env.IS_BUILD != 'true' && env.THREAD_ID != ''
-        run: |
-          python src/save_assets.py
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add assets
-          if git diff --cached --quiet; then
-            echo "保存する新規素材はありません"
-          else
-            git commit -m "assets: thread ${THREAD_ID}"
-            git push
-          fi
-
       # 6. 基本データの処理（Discord取得 or テスト実行）＋ 音声生成（合成モードではスキップ）
       - name: Run Voice & Subtitle Generation
         if: env.IS_BUILD != 'true'
@@ -255,6 +240,25 @@ jobs:
         with:
           name: aviutl-assets
           path: aviutl_assets.zip
+
+      # 9.5 素材モード: 台本・音声・字幕をリポジトリに保存（/video での合成時に再利用）
+      - name: Save Assets to Repo
+        if: env.ASSETS_ONLY == 'true' && env.IS_BUILD != 'true' && env.THREAD_ID != ''
+        run: |
+          python src/save_assets.py
+          if [ -d assets/${THREAD_ID} ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add assets/${THREAD_ID}
+            if git diff --cached --quiet; then
+              echo "保存する新規素材はありません"
+            else
+              git commit -m "assets: thread ${THREAD_ID}"
+              git push
+            fi
+          else
+            echo "⚠️ assets/${THREAD_ID} が無いため保存をスキップします"
+          fi
 
       # 10. 成果物を Zip にまとめて Artifacts へ保存（動画合成がある場合のみ）
       - name: Create Zip Artifact
