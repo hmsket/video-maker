@@ -229,6 +229,8 @@ jobs:
           SUB_BOX_PAD: ${{ vars.SUB_BOX_PAD || '10' }}
           SUB_MARGIN_V: ${{ vars.SUB_MARGIN_V || '62' }}
           UPLOAD_TARGET_MB: ${{ vars.UPLOAD_TARGET_MB || '7.5' }}
+          # 合成モード（/video）では Flow 画像に水印がないためトリミングしない
+          WATERMARK_CROP: ${{ vars.WATERMARK_CROP || (env.IS_BUILD == 'true' && '0' || '0.08') }}
         run: |
           echo "━━ フォント設定の確認 ━━"
           echo "SUB_FONT_NAME=$SUB_FONT_NAME"

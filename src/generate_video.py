@@ -45,7 +45,7 @@ def create_placeholder_image(output_path, width=WIDTH, height=HEIGHT):
 
 
 def collect_scene_files(output_dir):
-    """scene_XX.jpg を番号順 (1 〜 最大番号) に並べる。
+    """scene_XX.* を番号順 (1 〜 最大番号) に並べる。
 
     画像生成に失敗して番号が欠けた場合は黒背景プレースホルダーで補完する。
     1枚も無い場合は黒背景を1枚だけ作る。
@@ -53,7 +53,7 @@ def collect_scene_files(output_dir):
     indices = sorted(
         int(m.group(1))
         for name in os.listdir(output_dir)
-        if (m := re.match(r"scene_(\d+)\.jpg$", name))
+        if (m := re.match(r"scene_(\d+)\.(jpg|jpeg|png|webp)$", name, re.I))
     )
 
     if not indices:
@@ -64,12 +64,62 @@ def collect_scene_files(output_dir):
 
     files = []
     for i in range(1, max(indices) + 1):
-        path = os.path.join(output_dir, f"scene_{i:02d}.jpg")
+        found = next(
+            (name for name in os.listdir(output_dir)
+             if (m := re.match(rf"scene_{i:02d}\.(jpg|jpeg|png|webp)$", name, re.I))),
+            None,
+        )
+        path = os.path.join(output_dir, found) if found else os.path.join(output_dir, f"scene_{i:02d}.jpg")
         if not os.path.exists(path):
-            print(f"⚠️ {path} が無いため、プレースホルダー黒背景画像を生成します。")
+            print(f"⚠️ scene_{i:02d} が無いため、プレースホルダー黒背景画像を生成します。")
             create_placeholder_image(path)
         files.append(path)
     return files
+
+
+def collect_assets(output_dir):
+    """番号つき素材を集めて1本のリストにまとめる（混合モード）。
+
+    - clip_XX.mp4（output/clips/ または output/）→ 動画クリップ
+    - scene_XX.jpg/png（output/）→ 静止画
+    - 同じ番号に両方があればクリップを優先
+    - 番号が空洞の場合は黒背景画像で補完
+    戻り値: [(kind, path)]  kind は "clip" / "image"
+    """
+    clip_dir = os.path.join(output_dir, "clips")
+    src = clip_dir if os.path.isdir(clip_dir) else output_dir
+
+    clips = {}
+    for name in sorted(os.listdir(src)):
+        if name.lower().endswith((".mp4", ".mov", ".webm", ".mkv")) and "draft_output" not in name.lower():
+            if (m := re.match(r"clip[_\-]?(\d+)", name, re.I)):
+                clips[int(m.group(1))] = os.path.join(src, name)
+
+    scenes = {}
+    for name in os.listdir(output_dir):
+        if (m := re.match(r"scene_(\d+)\.(jpg|jpeg|png|webp)$", name, re.I)):
+            scenes[int(m.group(1))] = os.path.join(output_dir, name)
+
+    nums = sorted(set(clips) | set(scenes))
+    if not nums:
+        print("⚠️ 素材が1つも無いため、黒背景を1枚だけ生成します。")
+        path = os.path.join(output_dir, "scene_01.jpg")
+        create_placeholder_image(path)
+        return [("image", path)]
+
+    assets = []
+    max_n = max(nums)
+    for i in range(1, max_n + 1):
+        if i in clips:
+            assets.append(("clip", clips[i]))
+        elif i in scenes:
+            assets.append(("image", scenes[i]))
+        else:
+            print(f"⚠️ 番号 {i} の素材が無いため、黒背景画像で補完します（ファイル名の番号をご確認ください）")
+            path = os.path.join(output_dir, f"scene_{i:02d}.jpg")
+            create_placeholder_image(path)
+            assets.append(("image", path))
+    return assets
 
 
 def collect_clip_files(output_dir):
@@ -156,14 +206,19 @@ def build_video(output_dir="output"):
     print(f"🔤 フォント設定: 字幕 FontName={SUB_FONT_NAME} / size={SUB_FONT_SIZE}")
     print(f"🔤 フォント設定: タイトル file={TITLE_FONT_FILE} / size={TITLE_FONT_SIZE}")
     clip_files = collect_clip_files(output_dir)
-    mode = "clip" if clip_files else "image"
-    if clip_files:
-        print(f"🎬 手動クリップモード: {len(clip_files)} 本の動画クリップを使用します")
-    else:
-        print("🖼️ 自動画像モード（Pollinations/アップロード画像）を使用します")
-
-    scene_files = clip_files or collect_scene_files(output_dir)
-    n = len(scene_files)
+    if clip_files and any(
+        not re.match(r"clip[_\-]?\d", os.path.basename(p), re.I) for p in clip_files
+    ):
+        print("ℹ️ 番号の無いクリップは投稿順に採番されます（古い添付ほど先頭）")
+    assets = collect_assets(output_dir)
+    kinds = [k for k, _ in assets]
+    scene_files = [p for _, p in assets]
+    mode = "clip" if "clip" in kinds else "image"
+    n_clip = sum(1 for k in kinds if k == "clip")
+    n_image = len(kinds) - n_clip
+    print(f"🎬 混合素材モード: 動画クリップ {n_clip} 本 / 静止画 {n_image} 枚（この順で連結）")
+    for i, (k, p) in enumerate(assets, start=1):
+        print(f"   Scene {i}: [{k}] {os.path.basename(p)}")
 
     # ── 音声長から各シーンの表示時間を算出 ──
     audio = AudioSegment.from_file(audio_path)
@@ -184,8 +239,8 @@ def build_video(output_dir="output"):
 
     # ── FFmpeg 入力コマンド構築 ──
     cmd = ["ffmpeg", "-y"]
-    for asset_path in scene_files:
-        if mode == "clip":
+    for i, asset_path in enumerate(scene_files):
+        if kinds[i] == "clip":
             # クリップ不足時はループで補完し、音声長で打ち切り（Veo側の音声は使わない）
             cmd += ["-stream_loop", "-1", "-t", str(scene_duration), "-i", asset_path]
         else:
@@ -204,7 +259,7 @@ def build_video(output_dir="output"):
     # 各素材を正規化 → [v0]..[v(n-1)]
     norm_parts = []
     for i in range(n):
-        if mode == "clip":
+        if kinds[i] == "clip":
             chain = _norm_chain(f"[{i}:v]", fps_norm)  # クリップには可視水印が付かない想定 → 下端切り詰めなし
         else:
             extra = ""
@@ -266,8 +321,8 @@ def build_video(output_dir="output"):
             + f"{plain_concat_in}concat=n={n}:v=1:a=0[vc];"
         )
         cmd2 = ["ffmpeg", "-y"]
-        for asset_path in scene_files:
-            if mode == "clip":
+        for i, asset_path in enumerate(scene_files):
+            if kinds[i] == "clip":
                 cmd2 += ["-stream_loop", "-1", "-t", str(scene_duration), "-i", asset_path]
             else:
                 cmd2 += ["-loop", "1", "-t", str(scene_duration), "-i", asset_path]
