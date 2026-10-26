@@ -1,0 +1,13 @@
+【画像プロンプト（各シーン用）】
+
+--- Scene 1 ---
+A grand historical painting of ancient Roman soldiers facing an invading army, dramatic lighting, epic style, no text
+
+--- Scene 2 ---
+Ancient Romans barricaded on a hill overlooking a burning city, historical art style, atmospheric smoke, no text
+
+--- Scene 3 ---
+Ancient bronze balance scales weighing gold coins, greedy warrior tampering with the weights, dramatic sunlight, historical painting
+
+--- Scene 4 ---
+Heroic Roman general Camillus pointing his sword in triumph after battle, classic oil painting style, brave atmosphere
