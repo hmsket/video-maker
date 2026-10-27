@@ -30,9 +30,14 @@ def list_thread_messages_oldest_first(thread_id):
 
 
 def sort_index(att_name, fallback):
-    """ファイル名に含まれる数字を優先し、無ければ投稿順で採番する。"""
-    base = os.path.splitext(att_name)[0]
-    m = re.search(r"(\d+)", base)
+    """clip_/scene_ の直後の数字だけを番号とみなす。
+
+    例: clip_02.mp4 -> 2 / Scene 3.png -> 3
+    それ以外（Export_28478.mp4 等の日付・ID付きファイル名）は
+    投稿順のカウンタ (fallback) を使う。
+    """
+    name = os.path.basename(att_name).lower()
+    m = re.search(r"(?:clip|scene)[_\-\s]*?(\d+)", name)
     if m:
         return int(m.group(1))
     return fallback
@@ -57,22 +62,23 @@ def fetch_assets(output_dir="output"):
     video_atts = []
     image_atts = []
 
-    for pos, msg in enumerate(messages, start=1):
+    counter = 0  # 名前に clip/scene 番号が無い添付は「古い投稿ほど先」の連番で採番する
+    for msg in messages:
         for att in msg.get("attachments", []):
+            counter += 1
             name = att.get("filename", "")
             url = att.get("url", "")
             ext = os.path.splitext(name)[1].lower()
             if not url or not ext:
                 continue
             is_bot = bool(msg.get("author", {}).get("bot"))
-            base_name = os.path.splitext(name)[0].lower()
             # ボット投稿の添付（過去の draft_output.zip など）は素材にならない
             if is_bot:
                 continue
             if ext in VIDEO_EXTS:
-                video_atts.append((sort_index(name, pos), ext, name, url))
-            elif ext in IMAGE_EXTS and (base_name.startswith("scene") or base_name.startswith("clip")):
-                image_atts.append((sort_index(name, pos), ext, name, url))
+                video_atts.append((sort_index(name, counter), ext, name, url))
+            elif ext in IMAGE_EXTS:
+                image_atts.append((sort_index(name, counter), ext, name, url))
 
     if not video_atts and not image_atts:
         print("📭 スレッド内にユーザー添付の素材ファイルはありませんでした（自動画像生成へフォールバック）")

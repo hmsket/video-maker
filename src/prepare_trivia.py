@@ -92,6 +92,27 @@ def prepare_trivia():
     meta = extract_meta(messages) if messages else None
     script_text = extract_edited_script(messages) if messages else ""
 
+    # 30秒シーン構成: 修正台本が {"theme":..., "scenes":[...]} の JSON コードブロックなら
+    # scenes として取り込む（/fact の AI 修正もこの JSON の narration を書き換える形で行う）
+    scenes = None
+    title_from_theme = None
+    stripped = (script_text or "").strip()
+    if stripped.startswith("{") and '"scenes"' in stripped:
+        try:
+            payload = json.loads(stripped)
+            if isinstance(payload.get("scenes"), list) and payload["scenes"]:
+                scenes = payload["scenes"]
+                title_from_theme = payload.get("theme")
+                script_text = "".join((s.get("narration") or "").strip() for s in scenes)
+                print("✅ 修正台本を 30秒シーン構成 (scenes) として取り込みました。")
+        except json.JSONDecodeError:
+            pass
+
+    # 修正投稿が無い/旧形式の場合はメタデータ側の scenes を採用
+    if not scenes and (meta or {}).get("scenes"):
+        scenes = meta["scenes"]
+        print("ℹ️ メタデータからシーン構成 (scenes) を復元しました。")
+
     if not script_text and (meta or {}).get("script_text"):
         script_text = meta["script_text"].strip()
         print("ℹ️ 修正投稿がないため、元台本をそのまま使用します。")
@@ -103,14 +124,20 @@ def prepare_trivia():
     else:
         status = "confirmed"
 
+    img_prompts, vid_prompts = ((meta or {}).get("image_prompts", []), (meta or {}).get("video_prompts", []))
+    if scenes:
+        img_prompts = [s.get("image_prompt", "") for s in scenes if s.get("image_prompt")]
+        vid_prompts = [s.get("video_motion_prompt", "") for s in scenes if s.get("video_motion_prompt")]
+
     data = {
         "thread_id": thread_id,
-        "title": (meta or {}).get("title") or "歴史雑学ショート",
+        "title": title_from_theme or (meta or {}).get("title") or "歴史雑学ショート",
         "summary": (meta or {}).get("summary", ""),
         "script_text": script_text,
+        "scenes": scenes or [],
         "sentences": [],
-        "image_prompts": (meta or {}).get("image_prompts", []),
-        "video_prompts": (meta or {}).get("video_prompts", []),
+        "image_prompts": img_prompts,
+        "video_prompts": vid_prompts,
         "article": (meta or {}).get("article", {}),
         "status": status,
     }

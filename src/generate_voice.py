@@ -72,15 +72,28 @@ def format_srt_time(ms):
     mins, sec = divmod(sec, 60)
     return f"{hrs:02d}:{mins:02d}:{sec:02d},{msec:03d}"
 
-def generate_voice_and_srt(script_text, output_dir="output"):
+def scenes_mode(data):
+    """trivia_result.json が 30秒シーン構成 (scenes) なら True。"""
+    return isinstance(data.get("scenes"), list) and len(data.get("scenes", [])) >= 3
+
+
+def generate_voice_and_srt(script_text, output_dir="output", units=None):
+    """音声・SRT を生成する。
+
+    units が指定された場合（30秒シーン構成モード）は
+    (ナレーション, 画面字幕テキスト, 台本上の秒数) のリストで1シーン1音声にする。
+    """
     os.makedirs(output_dir, exist_ok=True)
-    sentences = split_sentences(script_text)
-    
+    if units is None:
+        sentences = split_sentences(script_text)
+        units = [(s, s, 0.0) for s in sentences]
+    items = list(units)
+
     combined_audio = AudioSegment.empty()
     srt_entries = []
     current_time_ms = 0
-    
-    for idx, sentence in enumerate(sentences, start=1):
+
+    for idx, (sentence, caption, _scripted) in enumerate(items, start=1):
         # 1. 音声クエリ作成
         query_res = requests.post(
             f"{AIVIS_URL}/audio_query",
@@ -108,8 +121,8 @@ def generate_voice_and_srt(script_text, output_dir="output"):
         
         start_srt = format_srt_time(current_time_ms)
         end_srt = format_srt_time(current_time_ms + duration_ms)
-        
-        srt_entries.append(f"{idx}\n{start_srt} --> {end_srt}\n{wrap_japanese(sentence)}\n")
+
+        srt_entries.append(f"{idx}\n{start_srt} --> {end_srt}\n{wrap_japanese(caption)}\n")
         
         combined_audio += audio_seg
         current_time_ms += duration_ms
@@ -123,11 +136,15 @@ def generate_voice_and_srt(script_text, output_dir="output"):
         f.write("\n".join(srt_entries))
         
     duration_sec = current_time_ms / 1000
-    print(f"✅ 音声・字幕生成完了 (計 {len(sentences)} 文, 全長: {duration_sec:.2f}秒)")
+    label = "シーン" if units else "文"
+    n_items = len(items)
+    print(f"✅ 音声・字幕生成完了 (計 {n_items} {label}, 全長: {duration_sec:.2f}秒)")
 
     # Discord 通知（全体音声ファイルを添付）
-    msg = f"🎙️ **【進捗通知】音声・字幕の生成が完了しました！**\n- **文章数:** {len(sentences)} 文\n- **音声長:** {duration_sec:.2f} 秒"
+    msg = f"🎙️ **【進捗通知】音声・字幕の生成が完了しました！**\n- **要素数:** {n_items} {label}\n- **音声長:** {duration_sec:.2f} 秒"
     send_to_discord(msg, file_path=full_voice_path)
+
+    return duration_sec, n_items
 
 if __name__ == "__main__":
     # Discordからの入力またはローカルのjsonから台本を取得
@@ -135,6 +152,13 @@ if __name__ == "__main__":
     if os.path.exists(json_path):
         with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        generate_voice_and_srt(data["script_text"])
+        if scenes_mode(data):
+            units = [
+                (s.get("narration", ""), s.get("screen_text", ""), float(s.get("duration_sec") or 0))
+                for s in data["scenes"]
+            ]
+            generate_voice_and_srt(data.get("script_text", ""), units=units)
+        else:
+            generate_voice_and_srt(data["script_text"])
     else:
         print(f"⚠️ {json_path} が存在しません。")

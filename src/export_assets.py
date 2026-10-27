@@ -34,35 +34,53 @@ def export_assets(output_dir=OUTPUT_DIR, zip_name="aviutl_assets.zip"):
         data = json.load(f)
     script = data.get("script_text", "")
     title = data.get("title", "")
-    prompts = data.get("image_prompts", [])
+    scenes = data.get("scenes") or []
+    prompts = data.get("image_prompts") or [s.get("image_prompt") for s in scenes if s.get("image_prompt")]
+    motions = data.get("video_prompts") or [s.get("video_motion_prompt") for s in scenes if s.get("video_motion_prompt")]
 
     # script.txt
     with open(os.path.join(output_dir, "script.txt"), "w", encoding="utf-8") as f:
         f.write(f"{title}\n\n{script}\n" if title else f"{script}\n")
 
-    # prompts.txt（Gemini / Flow にコピペしやすいよう番号付き）
+    # prompts.txt（Gemini / Flow にコピペしやすいようシーン番号付き。縦構図タグも補完）
+    VERTICAL_TAG = (
+        "vertical 9:16 portrait composition for YouTube Shorts, "
+        "1080x1920 full-frame, main subject centered in the upper-middle area "
+        "to leave space for subtitles at the bottom"
+    )
     with open(os.path.join(output_dir, "prompts.txt"), "w", encoding="utf-8") as f:
-        f.write("【画像プロンプト（各シーン用）】\n")
+        f.write("【画像プロンプト（各シーン用・縦型 Shorts 用）】\n")
         for i, p in enumerate(prompts, start=1):
-            f.write(f"\n--- Scene {i} ---\n{p}\n")
+            p = p.strip()
+            if "9:16" not in p:
+                # 台本生成時に縦構図指示が入っていない古い台本にも対応して補う
+                p = f"[{VERTICAL_TAG}] {p}"
+            motion = motions[i - 1].strip() if i - 1 < len(motions) else ""
+            f.write(f"\n--- Scene {i - 1} ---\n[画像]\n{p}\n")
+            if motion:
+                f.write(f"[動き (Veo)]\n{motion}\n")
         if not prompts:
             f.write("（プロンプトなし）\n")
 
-    # sentences.csv（Excel/AviUtl で見ることを想定し BOM 付き UTF-8）
-    sentences = split_sentences(script)
+    # sentences.csv（Excel や AviUtl で見ることを想定し BOM 付き UTF-8）
+    # シーン構成モードでは 1行 = 1シーン（screen_text も併記）
+    if scenes:
+        source = [(s.get("narration", ""), s.get("screen_text", ""), float(s.get("duration_sec") or 0)) for s in scenes]
+    else:
+        source = [(s, "", 0.0) for s in split_sentences(script)]
     rows = []
     current = 0.0
-    for i, s in enumerate(sentences, start=1):
+    for i, (narr, cap, scripted) in enumerate(source, start=1):
         wav_path = os.path.join(output_dir, f"sent_{i:02d}.wav")
         dur = 0.0
         if os.path.exists(wav_path):
             dur = len(AudioSegment.from_file(wav_path)) / 1000.0
-        rows.append([i, round(current, 3), round(dur, 3), len(s), s])
+        rows.append([i, round(current, 3), round(dur, 3), len(narr), cap or narr, scripted or ""])
         current += dur
 
     with open(os.path.join(output_dir, "sentences.csv"), "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
-        writer.writerow(["idx", "start_sec", "duration_sec", "chars", "text"])
+        writer.writerow(["scene", "start_sec", "duration_sec", "chars", "screen_text", "scripted_sec"])
         writer.writerows(rows)
 
     # title.txt（無ければ作る）

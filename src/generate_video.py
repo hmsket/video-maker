@@ -223,14 +223,39 @@ def build_video(output_dir="output"):
     # ── 音声長から各シーンの表示時間を算出 ──
     audio = AudioSegment.from_file(audio_path)
     total_sec = len(audio) / 1000.0
-    scene_duration = total_sec / n  # 検出した素材数で均等割り
+    scene_duration = total_sec / n  # 検出した素材数で均等割り（旧形式のフォールバック）
+
+    # 30秒シーン構成: 台本の scenes[].duration_sec を優先（音声の実長に比率スケールして同期保証）
+    scenes_list = []
+    try:
+        with open(os.path.join(output_dir, "trivia_result.json"), encoding="utf-8") as f:
+            scenes_list = json.load(f).get("scenes") or []
+    except Exception:
+        scenes_list = []
+    scripted = []
+    for s in scenes_list:
+        try:
+            scripted.append(float(s.get("duration_sec") or 0))
+        except Exception:
+            scripted.append(0.0)
+    if scripted and sum(1 for x in scripted if x > 0) == n:
+        scale = total_sec / sum(scripted)
+        durs = [d * scale if d > 0 else scene_duration for d in scripted]
+        print(f"⏱️ シーン構成モード: 台本の尺を優先します（合計 {sum(durs):.2f} 秒 = 音声長）")
+    else:
+        durs = [scene_duration] * n
+        if scenes_list and len(scenes_list) != n:
+            print(f"⚠️ scenes の数({len(scenes_list)})と素材数({n})が異なるため、均等割りで続行します")
+    is_scene_mode = bool(scenes_list)
+    scene_duration = durs[0]
 
     # Subtitles フィルタ用のパス指定（コロンなどのパス特殊文字対策）
     clean_srt_path = srt_path.replace("\\", "/").replace(":", "\\:")
 
     # ── タイトル（イントロ）の準備 ──
     title = load_title(output_dir)
-    use_intro = bool(title) and scene_duration > TITLE_INTRO_SEC + 0.5
+    # シーン構成モードでは Scene 0 自体がタイトルシーンなので、ぼかしイントロは使わない
+    use_intro = bool(title) and not is_scene_mode and scene_duration > TITLE_INTRO_SEC + 0.5
     title_text = title or "歴史雑学ショート"
     title_file = os.path.join(output_dir, "title.txt").replace("\\", "/").replace(":", "\\:")
     # タイトルは日本語として自然な位置で折り返してから使う（CapCut風の2行センタリング）
@@ -241,10 +266,10 @@ def build_video(output_dir="output"):
     cmd = ["ffmpeg", "-y"]
     for i, asset_path in enumerate(scene_files):
         if kinds[i] == "clip":
-            # クリップ不足時はループで補完し、音声長で打ち切り（Veo側の音声は使わない）
-            cmd += ["-stream_loop", "-1", "-t", str(scene_duration), "-i", asset_path]
+            # クリップ不足時はループで補完し、シーン尺で打ち切り（Veo側の音声は使わない）
+            cmd += ["-stream_loop", "-1", "-t", f"{durs[i]:.3f}", "-i", asset_path]
         else:
-            cmd += ["-loop", "1", "-t", str(scene_duration), "-i", asset_path]
+            cmd += ["-loop", "1", "-t", f"{durs[i]:.3f}", "-i", asset_path]
     cmd += ["-i", audio_path]
 
     # Discord へ投稿するためビットレート制御（既定は約7.5MBに収まる目安）
@@ -323,9 +348,9 @@ def build_video(output_dir="output"):
         cmd2 = ["ffmpeg", "-y"]
         for i, asset_path in enumerate(scene_files):
             if kinds[i] == "clip":
-                cmd2 += ["-stream_loop", "-1", "-t", str(scene_duration), "-i", asset_path]
+                cmd2 += ["-stream_loop", "-1", "-t", f"{durs[i]:.3f}", "-i", asset_path]
             else:
-                cmd2 += ["-loop", "1", "-t", str(scene_duration), "-i", asset_path]
+                cmd2 += ["-loop", "1", "-t", f"{durs[i]:.3f}", "-i", asset_path]
         cmd2 += ["-i", audio_path]
         cmd2 += [
             "-filter_complex", filter_clean,

@@ -220,88 +220,63 @@ def pick_article():
 
 
 # ------------------------------------------------------------------ 2. 台本生成 (Gemini & Groq Fallback)
-SCRIPT_PROMPT = """あなたは、小学生向けの歴史雑学ショート動画の台本作家です。
-下の【原文】だけを材料に、YouTube Shorts / TikTok 用(読み上げ約30〜40秒)のナレーション台本を書いてください。
-目標は「事実の羅列」ではなく、「小学生でもワクワクしながら最後まで理解できる、テンポの良いショート物語」です。
-
-【言葉の易しさとトーン（最重要ルール）】
-・文末はすべて親しみやすい「です・ます調」（「〜です」「〜ます」「〜でしょうか？」）で統一してください。
-・小学生（10〜12歳）にもスッと頭に入るよう、難しい歴史用語・専門用語は噛み砕いたやさしい表現に変換してください。
-  （例: 重装騎兵→本物の騎士／火器→鉄砲や大砲／騎馬演舞・カルーセル→馬のパレードやダンス）
-・漢字は小学校中・高学年で読めるものが目安。読みづらい漢字・難しい漢字は平仮名に開いてください。
-・1文のなかの固有名詞（人名・地名・建物名・国名）は1つだけ。知らない言葉が続くと、内容が頭に入らなくなります。
-・ぼんやりした数量は、目に浮かぶ具体的な形で伝えます（「多くの」→「なんと約3,000人」など）。ただし、【原文】に書かれていない数字は絶対に使わないでください。
-
-【STEP 1: 物語の軸と、「問い」と「答え」を決める(最重要)】
-原文から、次のどれか「ひとつだけ」を軸に選びます。
-  ・ひとりの人物の運命  ・ひとつの出来事  ・ひとつの建物や物  ・ひとつの謎や疑問
-台本のすべての文は、この軸に関係していなければなりません。
-・軸を複数の候補から選べる場合は、「視聴者の予想から一番遠いもの」を選んでください。誰もがイメージする常識と真逆の展開を語れる軸こそが、最後まで見たくなる物語になります。
-・軸にできる「びっくりするような事実」が原文に見当たらないときは、あえて無理をせず narrative_ok を false にしてください。
-原文が、概説・一覧・年表のようで、軸をひとつに絞れない場合は、台本を書かず narrative_ok を false にしてください。
-
-次に、この軸の面白さを「問い」の形にして、その「答え」を、先に原文から探します。
-  ・答えが書かれた文を、原文から一字一句そのまま写して、plan.answer_quote に入れる。
-  ・「なぜ？」(原因・理由)と問うなら、その原因・理由が、原文にはっきり書かれていることを確認する。
-  ・答えが原文に見つからないときは、narrative_ok を false にする。
-  ・answer_quote の内容は、「転」か「結」の fact の文として台本に必ず入れる。
-
-【STEP 2: 起承転結で、テンポ良くつなげて書く】
-各文に part("起","承","転","結")を付けます。
-  起: 冒頭1文で、視聴者の予想と真逆の事実、または強い「なぜ？」を置き、最後まで離脱できない問いを立てる(opinion: 1文)。
-  承: 登場人物・場所・状況が目に浮かぶように「誰が・どこで・何を」を具体的に語る(fact: 2〜3文)。原文にある数字（人数・年・長さなど）を使うと画面が生きます。
-  転: ここが物語の一番面白い瞬間。視聴者の予想をひっくり返る出来事・意外な事実を置く(fact: 2〜3文)。「ところが」「実は」などの一言葉を使ってください。
-  結: 冒頭の問いの答え(answer_quote の内容)をはっきり語り(fact: 1〜2文)、「思ったのとは違いましたね」のような感情の動きを伴う短い感想や問いかけ(opinion: 1文)で余韻を残して締める。
-
-【ファクトチェックを通過するための重要注意事項】
-・単一の原因に限定して断定しないでください（❌「一番の理由は〜」「〜のせいで」）。
-  「〜といった理由がありました」「〜など、さまざまな要因が重なりました」のように柔軟な表現にしてください。
-・因果関係を直接的に断定しすぎないでください（例: 「〜へと形を変えながら受け継がれていきました」のように史実に忠実にぼかす）。
-・因果の言葉(「その結果」「そのため」「だから」)は、原文の引用が明らかな因果関係(because, due to, as a result, led to, caused など)を述べているときだけ使用可能です。
-
-【STEP 3: 事実と感想の書き分け(ルール)】
-・台本は「1文ずつ」に分け、各文に type を付けます。
-  - "fact": 原文に書かれた事実を述べる文(全体で5〜6文)。必ず evidence_quote を付ける。
-  - "opinion": 問いかけ・感想・まとめの文(全体で2〜3文)。evidence_quote は null。
-・fact の evidence_quote は、【原文】から一字一句そのまま写した英語の連続した引用(15〜300文字)。
-・fact の text に入れてよい内容は、その引用が直接裏付けるものだけです。
-
-【納得水準の最終チェック（1つでも満たせなければ書き直してから出力）】
-・冒頭の1文だけで、最後まで見たくなるか（予想と真逆の事実、または強い「なぜ？」があるか）。
-・小さな子に読み聞かせして、全部が伝わるか（調べる必要のある言葉や漢字が残っていないか）。
-・「転」で、視聴者の予想がひっくり返るか（ただの事実の説明で流れていないか）。
-・最後の1文で、答えの「おどろき」を実感として受け取れるか（感情の動きや問いかけが残るか）。
-
-【長さ・テンポ（厳密遵守）】
-・台本全体で【300〜340文字】（読み上げ30〜40秒）。
-・1文は【35文字以内】でリズム良く書いてください。
-・文字数が足りない場合は、別の話題を足さず、軸に沿った具体描写（誰が・どこで・何を）を原文から拾って増やしてください。
-
-【構成の例(中身は真似しないこと。型と「です・ます調」の参考)】
-  起(opinion): 「あの有名な〇〇は、実は、みなさんの想像する△△とは真逆のものです。では、なぜでしょうか？」
-  承(fact): 「〇〇は、□□の年に◇◇として姿を現しました。」「当時の記録では、▢▢という様子が伝わっています。」
-  転(fact): 「ところが、その後、〇〇の使われ方は正反対のものへと大きく変わります。」「実はその裏には、▣▣という事情が隠れていました。」
-  結(fact→opinion): 「こうして、〇〇は最後に△△として残ったのです。」「最初のイメージとは違いましたね。みなさんはどう感じましたか？」
-
+# 厳格な30秒構成（シーン6つ・シーンごとの尺/文字数指定）版プロンプト
+SCRIPT_PROMPT = """あなたはYouTube Shortsチャンネル「諸説ありch」の専属テンポ重視放送作家です。
+下の【原文】と【記事タイトル】(=テーマの材料)をもとに、以下の【厳格な30秒構成ルール】を100%遵守して、JSON形式のみで出力してください。
+【厳格な30秒構成ルール】
+- 動画全体の長さ：30秒（ナレーション実質26秒）
+- 音声合成用テキスト（narration）の総文字数：ひらがな換算で「150文字〜160文字」を厳守すること（多すぎても少なすぎても不可）。
+- 各シーンの文字数と時間の枠を絶対にオーバーしないこと。
+【各シーンの役割・尺・文字数制限】
+1. Scene 0 (0-2秒 / 2秒間): 【タイトル】
+   - 画面文字：フックのあるタイトル（10文字以内）
+   - 音声：タイトルコール（ひらがな 8〜10文字）
+2. Scene 1 (2-9秒 / 7秒間): 【説A】
+   - 画面文字：説Aの要約（15文字以内）
+   - 音声：通説・導入（ひらがな 35〜40文字、読点「、」で間を作る）
+3. Scene 2 (9-16秒 / 7秒間): 【説B】
+   - 画面文字：説Bの要約（15文字以内）
+   - 音声：対立する裏説（ひらがな 35〜40文字、読点「、」で間を作る）
+4. Scene 3 (16-23秒 / 7秒間): 【考察】
+   - 画面文字：考察のポイント（15文字以内）
+   - 音声：なぜその説があるか（ひらがな 35〜40文字、読点「、」で間を作る）
+5. Scene 4 (23-28秒 / 5秒間): 【まとめ】
+   - 画面文字：問いかけ（12文字以内）
+   - 音声：視聴者への問いかけ（ひらがな 25〜30文字）
+6. Scene 5 (28-30秒 / 2秒間): 【アウトロ】
+   - 画面文字：「諸説あり！」
+   - 音声：「しょせつあり！」（5文字）
+【作り方のルール（歴史雑学としての品質）】
+- 原文に書かれていない数字・事実を絶対に作らない（ファクトチェック重視）。
+- 説A(通説)と説B(裏説)が「対立」する構造になるよう、原文から2つの立場を探す。対立する2つの説明が見つからない場合は、narrative_ok を false にする。
+- 言葉は易しく（難しい漢字はひらがな開き）、tone は「です・ます調」。
+- narration はひらがなと「、」のみ（記号・漢字・英数字を入れない。数字は「よんじゅうろく」のようにひらがなで書く）。
+【重要：プロンプト生成のルール】
+- image_prompt：Google Flow（Imagen）に入力する英語の画像生成プロンプト。
+  必ず「vertical 9:16 portrait composition」を含め、被写体は中央〜やや上に置く（下部に字幕スペースを空ける）。
+  歴史画風・文字なし・残酷な描写なし。
+- video_motion_prompt：Google Flow（Veo）に入力する動きの英語プロンプト。
+  服や人物の詳細ではなく「Camera zoom in, flames flicker, slow movement」などのカメラワークや環境の動的な変化のみを簡潔に書くこと。
 {feedback}
-【記事タイトル】{title}
+【記事タイトル（テーマの材料）】{title}
 【原文】
 {text}
-
-次の JSON だけを返してください(narrative_ok が false のときは、sentences は空でよい):
+次の JSON だけを返してください(narrative_ok が false のときは、scenes は空でよい):
 {
   "narrative_ok": true,
-  "reason_if_not": "false のときだけ、軸を絞れない理由",
-  "plan": {"axis": "物語の軸(1文)", "hook_question": "起で立てる疑問", "payoff": "結で回収する答え(日本語)",
-           "answer_quote": "答えが書かれた、原文からの英語の引用(一字一句そのまま)"},
-  "title": "惹きつける日本語タイトル(20文字以内)",
+  "reason_if_not": "false のときだけ、作れない理由",
+  "theme": "テーマ名(惹きつける日本語タイトル、20文字以内)",
   "summary": "原文の事実だけによる概要(120文字程度)",
-  "sentences": [
-    {"text": "日本語の1文", "part": "起", "type": "opinion", "evidence_quote": null},
-    {"text": "日本語の1文", "part": "承", "type": "fact", "evidence_quote": "原文からの英語の引用"}
-  ],
-  "image_prompts": ["英語の画像プロンプト4つ(歴史画風、文字なし、残酷な描写なし)"],
-  "video_prompts": ["英語のカメラワーク指示4つ"]
+  "scenes": [
+    {
+      "scene_index": 0,
+      "duration_sec": 2,
+      "screen_text": "漢字ありの字幕テキスト",
+      "narration": "ひらがなと「、」のみのTTS読み上げ用テキスト",
+      "image_prompt": "English image generation prompt",
+      "video_motion_prompt": "English camera motion prompt for Veo"
+    }
+  ]
 }
 """
 
@@ -438,19 +413,43 @@ def generate_draft(article):
 
     if d.get("narrative_ok") is False:
         raise NarrativeUnsuitable(d.get("reason_if_not") or "軸を絞れない記事")
-    sents = d.get("sentences")
-    if not isinstance(sents, list) or not sents:
-        raise ValueError("sentences がありません")
-    d["sentences"] = [s for s in sents if isinstance(s, dict)]
-    d.setdefault("title", article["title"][:20])
+    scenes = d.get("scenes")
+    if isinstance(scenes, list) and scenes:
+        # ── 30秒シーン構成モード ──
+        d["scenes"] = [s for s in scenes if isinstance(s, dict)]
+    else:
+        # ── 旧形式（起承転結の sentences）のフォールバック ──
+        sents = d.get("sentences")
+        if not isinstance(sents, list) or not sents:
+            raise ValueError("scenes / sentences がありません")
+        d["sentences"] = [s for s in sents if isinstance(s, dict)]
+    d.setdefault("title", d.get("theme") or article["title"][:20])
     d.setdefault("summary", "")
     d.setdefault("image_prompts", [])
     d.setdefault("video_prompts", [])
     return d
 
 
-def script_text(sentences):
+def script_text(data):
+    """台本文を取得する。scenes（30秒構成）と sentences（旧形式）の両方に対応。"""
+    if isinstance(data, dict):
+        scenes = data.get("scenes")
+        if isinstance(scenes, list) and scenes:
+            return "".join((s.get("narration") or "").strip() for s in scenes)
+        sentences = data.get("sentences") or []
+    else:
+        sentences = data
     return "".join(s["text"].strip() for s in sentences)
+
+
+def scene_prompt_lists(data):
+    """scenes から画像/動画プロンプト一覧を取り出す（無ければ元のフィールドを使う）。"""
+    scenes = data.get("scenes") if isinstance(data, dict) else None
+    if isinstance(scenes, list) and scenes:
+        img = [s["image_prompt"] for s in scenes if isinstance(s, dict) and s.get("image_prompt")]
+        vid = [s["video_motion_prompt"] for s in scenes if isinstance(s, dict) and s.get("video_motion_prompt")]
+        return img, vid
+    return data.get("image_prompts", []), data.get("video_prompts", [])
 
 
 # ------------------------------------------------------------------ 3. Discord 投稿 & 保存
@@ -464,9 +463,10 @@ def build_meta_message(article, data):
         "type": "video_maker_meta",
         "title": data.get("title"),
         "summary": data.get("summary"),
-        "script_text": script_text(data["sentences"]),
-        "image_prompts": data.get("image_prompts", []),
-        "video_prompts": data.get("video_prompts", []),
+        "script_text": script_text(data),
+        "scenes": data.get("scenes", []),
+        "image_prompts": scene_prompt_lists(data)[0],
+        "video_prompts": scene_prompt_lists(data)[1],
         "article": {
             "title": article["title"],
             "url": article.get("fullurl"),
@@ -486,8 +486,8 @@ def build_messages(article, data):
     """概要メッセージと、コードブロック単体の台本メッセージを2つ作成する。"""
     jst = timezone(timedelta(hours=9))
     accessed = datetime.now(jst).strftime("%Y/%m/%d %H:%M")
-    sents = data["sentences"]
-    pure_script = script_text(sents)
+    scenes = data.get("scenes") or []
+    pure_script = script_text(data)
 
     # 1. 概要・出典・案内メッセージ
     info_msg = (
@@ -503,7 +503,12 @@ def build_messages(article, data):
     )
 
     # 2. 台本のみのメッセージ（コピー専用）
-    script_msg = f"{pure_script}"
+    # 30秒構成のときは JSON 全体をコードブロックで出す（/fact の修正も narration を書き換える JSON で行う）
+    if scenes:
+        payload = {"theme": data.get("title"), "scenes": scenes}
+        script_msg = "```json\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n```"
+    else:
+        script_msg = f"{pure_script}"
 
     return info_msg, script_msg
 
@@ -514,10 +519,11 @@ def save_trivia_json(article, data, thread_id=None):
         "thread_id": str(thread_id) if thread_id else None,
         "title": data.get("title", article["title"]),
         "summary": data.get("summary", ""),
-        "script_text": script_text(data["sentences"]),
-        "sentences": data["sentences"],
-        "image_prompts": data.get("image_prompts", []),
-        "video_prompts": data.get("video_prompts", []),
+        "script_text": script_text(data),
+        "scenes": data.get("scenes", []),
+        "sentences": data.get("sentences", []),
+        "image_prompts": scene_prompt_lists(data)[0],
+        "video_prompts": scene_prompt_lists(data)[1],
         "status": "generated",
         "article": {
             "title": article["title"],
