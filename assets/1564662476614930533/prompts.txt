@@ -1,0 +1,37 @@
+【画像プロンプト（各シーン用・縦型 Shorts 用）】
+
+--- Scene 0 ---
+[画像]
+vertical 9:16 portrait composition, medieval knight helmet, historical painting style, cinematic lighting, dark background, no text
+[動き (Veo)]
+Camera zoom in, flames flicker, slow movement
+
+--- Scene 1 ---
+[画像]
+vertical 9:16 portrait composition, medieval young servant boy in a castle, historical painting style, soft lighting, no text
+[動き (Veo)]
+Camera pan down, gentle light shift, slow movement
+
+--- Scene 2 ---
+[画像]
+vertical 9:16 portrait composition, mounted knight in heavy armor holding a spear, historical painting style, epic atmosphere, no text
+[動き (Veo)]
+Camera zoom in, dust particles floating, slow movement
+
+--- Scene 3 ---
+[画像]
+vertical 9:16 portrait composition, old medieval battlefield after sunset, historical painting style, moody atmosphere, no text
+[動き (Veo)]
+Camera pan right, smoke drifting, slow movement
+
+--- Scene 4 ---
+[画像]
+vertical 9:16 portrait composition, modern honorary medal and ribbon, historical painting style, elegant lighting, no text
+[動き (Veo)]
+Camera zoom in, light reflection, slow movement
+
+--- Scene 5 ---
+[画像]
+vertical 9:16 portrait composition, ancient scroll and seal, historical painting style, dramatic shadows, no text
+[動き (Veo)]
+Camera static, subtle light pulse, slow movement

@@ -1,0 +1,68 @@
+{
+  "thread_id": "1564662476614930533",
+  "title": "騎士の正体とは？",
+  "summary": "中世ヨーロッパの騎士は、元々「少年や従僕」を意味した言葉から発展し、軍事的な従者として馬上の戦いで活躍しました。やがて騎士道精神が生まれ、戦術の変化により実戦からは退きましたが、その称号や名誉は現代の称号や慈善活動へと受け継がれています。",
+  "script_text": "きしとはなにかもともと、きしという言葉は、少年や従僕を意味していました、時代とともに、馬上の戦士を指すようになりました、一方で、領主に仕えるエリート戦士として、強力な騎兵部隊を組織し、戦場で絶大な力を持っていました、しかし、銃などの強力な火器が登場すると、鎧を着た騎士たちは次第に実戦から姿を消していきました、実戦から退いた騎士の称号は、現代にどう受け継がれているのでしょうかしょせつあり",
+  "scenes": [
+    {
+      "scene_index": 0,
+      "duration_sec": 2,
+      "screen_text": "騎士の本当の姿",
+      "narration": "きしとはなにか"
+    },
+    {
+      "scene_index": 1,
+      "duration_sec": 7,
+      "screen_text": "元々は従僕だった",
+      "narration": "もともと、きしという言葉は、少年や従僕を意味していました、時代とともに、馬上の戦士を指すようになりました、"
+    },
+    {
+      "scene_index": 2,
+      "duration_sec": 7,
+      "screen_text": "貴族のエリート戦士",
+      "narration": "一方で、領主に仕えるエリート戦士として、強力な騎兵部隊を組織し、戦場で絶大な力を持っていました、"
+    },
+    {
+      "scene_index": 3,
+      "duration_sec": 7,
+      "screen_text": "火器の登場で衰退",
+      "narration": "しかし、銃などの強力な火器が登場すると、鎧を着た騎士たちは次第に実戦から姿を消していきました、"
+    },
+    {
+      "scene_index": 4,
+      "duration_sec": 5,
+      "screen_text": "称号は現代へ",
+      "narration": "実戦から退いた騎士の称号は、現代にどう受け継がれているのでしょうか"
+    },
+    {
+      "scene_index": 5,
+      "duration_sec": 2,
+      "screen_text": "諸説あり！",
+      "narration": "しょせつあり"
+    }
+  ],
+  "sentences": [],
+  "image_prompts": [
+    "vertical 9:16 portrait composition, medieval knight helmet, historical painting style, cinematic lighting, dark background, no text",
+    "vertical 9:16 portrait composition, medieval young servant boy in a castle, historical painting style, soft lighting, no text",
+    "vertical 9:16 portrait composition, mounted knight in heavy armor holding a spear, historical painting style, epic atmosphere, no text",
+    "vertical 9:16 portrait composition, old medieval battlefield after sunset, historical painting style, moody atmosphere, no text",
+    "vertical 9:16 portrait composition, modern honorary medal and ribbon, historical painting style, elegant lighting, no text",
+    "vertical 9:16 portrait composition, ancient scroll and seal, historical painting style, dramatic shadows, no text"
+  ],
+  "video_prompts": [
+    "Camera zoom in, flames flicker, slow movement",
+    "Camera pan down, gentle light shift, slow movement",
+    "Camera zoom in, dust particles floating, slow movement",
+    "Camera pan right, smoke drifting, slow movement",
+    "Camera zoom in, light reflection, slow movement",
+    "Camera static, subtle light pulse, slow movement"
+  ],
+  "article": {
+    "title": "Knight",
+    "url": "https://en.wikipedia.org/wiki/Knight",
+    "revid": 1382127217,
+    "license": "CC BY-SA 4.0"
+  },
+  "status": "confirmed"
+}
