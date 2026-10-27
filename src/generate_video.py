@@ -213,6 +213,7 @@ def build_video(output_dir="output"):
     assets = collect_assets(output_dir)
     kinds = [k for k, _ in assets]
     scene_files = [p for _, p in assets]
+    n = len(scene_files)
     mode = "clip" if "clip" in kinds else "image"
     n_clip = sum(1 for k in kinds if k == "clip")
     n_image = len(kinds) - n_clip
