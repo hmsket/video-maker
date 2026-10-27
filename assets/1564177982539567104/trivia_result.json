@@ -1,0 +1,26 @@
+{
+  "thread_id": "1564177982539567104",
+  "title": "金ではなく鉄で勝利をつかめ！",
+  "summary": "紀元前390年、敵に襲われたローマは金貨1000ポンドで平和を買おうとしました。しかし敵が秤で不正をしていると知ると激怒して立ち上がり、見事敵を撃退。「金ではなく鉄で自由を買う」という歴史的な名言を生み出しました。",
+  "script_text": "大昔のローマは、敵にお金を払って助けてもらおうとした過去があります。一体なぜ、最後は武器を持って逆転勝利することができたのでしょうか？史料によれば、紀元前390年にローマはガリア人に襲われたとされています。敵は街を荒らし、高台に残った住民を数か月間閉じ込めたと伝えられます。ローマ人は金貨を多額に支払ったとされています。しかし、秤が不正だったと指摘されています。ローマ市民は怒り、一斉に武器を手に取り戦いに挑んだとされています。その結果、敵は撃退され街は守られたと語られています。ある指導者は『金ではなく鉄で自由を買う』と語ったと伝えられます。ずるい相手に屈せず立ち向かう姿は、今でもスカッとしますね！この出来事はローマの防衛意識を高め、後の拡大の礎となったと考えられます。歴史は、危機を乗り越える人々の勇気を今に伝えてくれます。",
+  "sentences": [],
+  "image_prompts": [
+    "A grand historical painting of ancient Roman soldiers facing an invading army, dramatic lighting, epic style, no text",
+    "Ancient Romans barricaded on a hill overlooking a burning city, historical art style, atmospheric smoke, no text",
+    "Ancient bronze balance scales weighing gold coins, greedy warrior tampering with the weights, dramatic sunlight, historical painting",
+    "Heroic Roman general Camillus pointing his sword in triumph after battle, classic oil painting style, brave atmosphere"
+  ],
+  "video_prompts": [
+    "Slow zoom out revealing the ancient city of Rome under siege by foreign warriors",
+    "Slow pan across desperate citizens barricaded on a rocky hill in ancient Rome",
+    "Close up shot tilting down to show the rigged gold weighing scales",
+    "Dynamic camera push in towards the victorious Roman general holding his sword high"
+  ],
+  "article": {
+    "title": "Ancient Rome",
+    "url": "https://en.wikipedia.org/wiki/Ancient_Rome",
+    "revid": 1380363934,
+    "license": "CC BY-SA 4.0"
+  },
+  "status": "confirmed"
+}
