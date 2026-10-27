@@ -20,7 +20,7 @@ const GROQ_MODEL = "openai/gpt-oss-120b";
 const MAX_AUTO_FIX_ROUNDS = 2;   // AI自動修正 → 再チェック の最大回数（チェック合計は 1 + この値）
 const META_MARKER = "【生成メタデータ】";
 const MIN_SCRIPT_CHARS = 120;    // AI修正結果の最短文字数（壊れた短文を取り込まない保険）
-const SCRIPT_MAX_CHARS = 340;    // 台本の目標上限（リポジトリ側のルールと同じ基準）
+const SCRIPT_MAX_CHARS = 1500;    // 台本の目標上限（リポジトリ側のルールと同じ基準）
 const WIKI_TEXT_MAX_CHARS = 3000;  // Wikipedia 抜粋の上限（Groq無料枠 TPM=8,000トークン/分 対策）
 const DEBUG = false;             // true にすると対象台本などの詳細ログが出る
 
@@ -612,9 +612,10 @@ const AUTO_FIX_SYSTEM_PROMPT = `あなたはYouTube Shorts向けの歴史雑学�
 
 【形式ルール】
 - 「です・ます調」の親しみやすいトーンを維持する。
-- 全体は300〜340文字を維持する。1文は35文字以内。起承転結の構成は崩さない。
+- 入力の台本が ```json の「scenes」構成（30秒シーン構成）だった場合は、**その JSON 全体の構造を保持したまま** scene_index・duration_sec などのキー名とシーン数を壊さず、narration / screen_text の文言だけを最小限修正して、同じ ```json コードブロック形式で出力する。
+- 平文の台本だった場合は、全体を300〜340文字（1文35文字以内・起承転結）で維持する。
 - 新しい事実・数字を捏造しない（【資料】内の情報の範囲でのみ修正）。
-- 出力は台本本文のみ。前置き・後書き・引用符・コードブロックは付けない。`;
+- 出力は台本（JSON の場合は JSON 全体）のみ。前置き・後書き・引用符は付けない。`;
 
 async function autoFixScript(scriptText, feedback, wikiText, apiKey) {
   LAST_AUTO_FIX_ERROR = "";

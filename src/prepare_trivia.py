@@ -20,6 +20,7 @@ import requests
 from discord_notifier import send_to_discord
 
 META_MARKER = "【生成メタデータ】"
+PROMPTS_MARKER = "【生成プロンプト】"
 API = "https://discord.com/api/v10"
 TEST_SCRIPT = "これはテスト用の歴史雑学台本です。正常に音声と画像が生成されるか確認しています。"
 
@@ -49,10 +50,27 @@ def extract_meta(messages):
                 meta = json.loads(block)
             except json.JSONDecodeError:
                 continue
-            if isinstance(meta, dict) and "image_prompts" in meta:
+            if isinstance(meta, dict) and (meta.get("type") == "video_maker_meta" or "image_prompts" in meta):
                 print("✅ メタデータ（プロンプト・出典・元台本）を復元しました。")
                 return meta
     print("⚠️ メタデータが見つかりません（古いスレッド、または fetch_trivia.py 実行以前の形式）。")
+    return None
+
+
+def extract_prompt_lists(messages):
+    """【生成プロンプト】メッセージから 画像/動画(動き)プロンプト JSON を復元する。"""
+    for m in messages:
+        content = m.get("content", "")
+        if PROMPTS_MARKER not in content:
+            continue
+        for block in re.findall(r"```(?:json)?\s*\n?([\s\S]*?)```", content):
+            try:
+                meta = json.loads(block)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(meta, dict) and "image_prompts" in meta:
+                print("✅ プロンプトメッセージから画像/動画プロンプトを復元しました。")
+                return meta
     return None
 
 
@@ -90,6 +108,7 @@ def prepare_trivia():
         print("⚠️ THREAD_ID / DISCORD_TOKEN が未設定のため、Discord から取得しません。")
 
     meta = extract_meta(messages) if messages else None
+    pmeta = extract_prompt_lists(messages) if messages else None
     script_text = extract_edited_script(messages) if messages else ""
 
     # 30秒シーン構成: 修正台本が {"theme":..., "scenes":[...]} の JSON コードブロックなら
@@ -125,9 +144,13 @@ def prepare_trivia():
         status = "confirmed"
 
     img_prompts, vid_prompts = ((meta or {}).get("image_prompts", []), (meta or {}).get("video_prompts", []))
+    if not img_prompts and pmeta:
+        img_prompts = pmeta.get("image_prompts", [])
+        vid_prompts = pmeta.get("video_motion_prompts", pmeta.get("video_prompts", []))
     if scenes:
-        img_prompts = [s.get("image_prompt", "") for s in scenes if s.get("image_prompt")]
-        vid_prompts = [s.get("video_motion_prompt", "") for s in scenes if s.get("video_motion_prompt")]
+        # 台本 JSON（スリム版）にプロンプトが無い場合はプロンプトメッセージ側を採用
+        img_prompts = [s.get("image_prompt", "") for s in scenes if s.get("image_prompt")] or img_prompts
+        vid_prompts = [s.get("video_motion_prompt", "") for s in scenes if s.get("video_motion_prompt")] or vid_prompts
 
     data = {
         "thread_id": thread_id,

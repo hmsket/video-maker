@@ -464,9 +464,6 @@ def build_meta_message(article, data):
         "title": data.get("title"),
         "summary": data.get("summary"),
         "script_text": script_text(data),
-        "scenes": data.get("scenes", []),
-        "image_prompts": scene_prompt_lists(data)[0],
-        "video_prompts": scene_prompt_lists(data)[1],
         "article": {
             "title": article["title"],
             "url": article.get("fullurl"),
@@ -474,6 +471,12 @@ def build_meta_message(article, data):
             "license": "CC BY-SA 4.0",
         },
     }
+    # 30秒構成の scenes（画像/動画プロンプト入りの長文）はメタには含めない:
+    # 2000文字制限を超えて投稿できないため。scenes は投稿した台本 JSON
+    # コードブロック（prepare_trivia.py が復元）から得る。
+    if not data.get("scenes"):
+        meta["image_prompts"] = data.get("image_prompts", [])
+        meta["video_prompts"] = data.get("video_prompts", [])
     # Discord の 2000 文字制限を回避するため圧縮した JSON にする
     body = json.dumps(meta, ensure_ascii=False, separators=(",", ":"))
     return (
@@ -504,13 +507,38 @@ def build_messages(article, data):
 
     # 2. 台本のみのメッセージ（コピー専用）
     # 30秒構成のときは JSON 全体をコードブロックで出す（/fact の修正も narration を書き換える JSON で行う）
+    # ※画像/動画プロンプトは含めず別メッセージに分離（2000文字制限対策）
     if scenes:
-        payload = {"theme": data.get("title"), "scenes": scenes}
-        script_msg = "```json\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n```"
+        slim_scenes = [
+            {
+                "scene_index": s.get("scene_index", i),
+                "duration_sec": s.get("duration_sec"),
+                "screen_text": s.get("screen_text"),
+                "narration": s.get("narration"),
+            }
+            for i, s in enumerate(scenes)
+        ]
+        payload = {"theme": data.get("title"), "scenes": slim_scenes}
+        script_msg = "```json\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n```"
     else:
         script_msg = f"{pure_script}"
 
-    return info_msg, script_msg
+    # 画像/動画プロンプト専用メッセージ（Gemini/Flow にコピペする用）
+    img_prompts, vid_prompts = scene_prompt_lists(data)
+    prompts_msg = ""
+    if img_prompts or vid_prompts:
+        prompts_payload = {
+            "type": "video_maker_prompts",
+            "image_prompts": img_prompts,
+            "video_motion_prompts": vid_prompts,
+        }
+        prompts_msg = (
+            "🎨 **【生成プロンプト】** Image→Google Flow(Imagen用) / Motion→Google Flow(Veo用)\n"
+            "```json\n"
+            + json.dumps(prompts_payload, ensure_ascii=False, separators=(",", ":"))
+            + "\n```"
+        )
+    return info_msg, script_msg, prompts_msg
 
 
 def save_trivia_json(article, data, thread_id=None):
@@ -543,7 +571,7 @@ def save_trivia_json(article, data, thread_id=None):
 def post_to_discord(article, data):
     import discord
 
-    info_msg, script_msg = build_messages(article, data)
+    info_msg, script_msg, prompts_msg = build_messages(article, data)
     meta_msg = build_meta_message(article, data)
     result = {"ok": False}
 
@@ -566,6 +594,10 @@ def post_to_discord(article, data):
 
                     # 2. コードブロック単体のメッセージを連続投稿（コピー用）
                     await thread.send(script_msg)
+
+                    # 2.5 画像/動画プロンプト（台本JSONと分離。prepare_trivia.py が復元）
+                    if prompts_msg:
+                        await thread.send(prompts_msg)
 
                     # 3. 動画生成用メタデータ(JSON)を投稿（prepare_trivia.py が後から読む）
                     await thread.send(meta_msg)
