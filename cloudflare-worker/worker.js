@@ -612,10 +612,10 @@ const AUTO_FIX_SYSTEM_PROMPT = `あなたはYouTube Shorts向けの歴史雑学�
 
 【形式ルール】
 - 「です・ます調」の親しみやすいトーンを維持する。
-- 入力の台本が ```json の「scenes」構成（30秒シーン構成）だった場合は、**その JSON 全体の構造を保持したまま** scene_index・duration_sec などのキー名とシーン数を壊さず、narration / screen_text の文言だけを最小限修正して、同じ ```json コードブロック形式で出力する。
+- 入力の台本が JSON の「scenes」構成（30秒シーン構成、コピー用コードブロックに格納されたもの）だった場合は、**その JSON 全体の構造を保持したまま** scene_index・duration_sec などのキー名とシーン数を壊さず、narration / screen_text の文言だけを最小限修正して、**同じ JSON コードブロック形式で出力する**。
 - 平文の台本だった場合は、全体を300〜340文字（1文35文字以内・起承転結）で維持する。
 - 新しい事実・数字を捏造しない（【資料】内の情報の範囲でのみ修正）。
-- 出力は台本（JSON の場合は JSON 全体）のみ。前置き・後書き・引用符は付けない。`;
+- 出力は台本（JSON の場合は JSON 全体）のみ。前置き・後書き・引用符は付けない。コードブロック記号そのものは出力に含めない。`;
 
 async function autoFixScript(scriptText, feedback, wikiText, apiKey) {
   LAST_AUTO_FIX_ERROR = "";
