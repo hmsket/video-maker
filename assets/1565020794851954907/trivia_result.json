@@ -1,0 +1,31 @@
+{
+  "thread_id": "1565020794851954907",
+  "title": "古代ローマの税金トリブツムの真実",
+  "summary": "古代ローマの軍費調達のための税トリブツムは、のちの返金を前提とした一時的な強制借入金という側面があった。しかし実際には戦利品が軍費を上回ることは稀であり、返金されないことも多かった。",
+  "script_text": "{\"type\":\"video_maker_prompts\",\"image_prompts\":[\"vertical 9:16 portrait composition, ancient Roman coin and map on a dark stone table, museum artifact style, no text, realistic, vertical 9:16\",\"vertical 9:16 portrait composition, ancient Roman senate meeting hall with stone columns, historical painting style, no text, vertical 9:16\",\"vertical 9:16 portrait composition, ancient Roman treasury with gold coins and scrolls, warm candlelight, no text, vertical 9:16\",\"vertical 9:16 portrait composition, ancient Roman legionary armor and shield resting on the ground, epic atmosphere, no text, vertical 9:16\",\"vertical 9:16 portrait composition, dramatic sunset over an ancient Roman colosseum ruin, no text, vertical 9:16\",\"vertical 9:16 portrait composition, ancient Roman marble bust against a dark background, dramatic lighting, no text, vertical 9:16\"],\"video_motion_prompts\":[\"Camera zoom in, slow movement\",\"Camera pan slowly across the ancient hall, subtle lighting change\",\"Camera zoom in, flames flicker, slow movement\",\"Camera slow tilt down, atmospheric dust particles floating\",\"Camera zoom out, slow movement\",\"Camera quick zoom in, subtle light flare\"]}",
+  "scenes": [],
+  "sentences": [],
+  "image_prompts": [
+    "vertical 9:16 portrait composition, ancient Roman coin and map on a dark stone table, museum artifact style, no text, realistic, vertical 9:16",
+    "vertical 9:16 portrait composition, ancient Roman senate meeting hall with stone columns, historical painting style, no text, vertical 9:16",
+    "vertical 9:16 portrait composition, ancient Roman treasury with gold coins and scrolls, warm candlelight, no text, vertical 9:16",
+    "vertical 9:16 portrait composition, ancient Roman legionary armor and shield resting on the ground, epic atmosphere, no text, vertical 9:16",
+    "vertical 9:16 portrait composition, dramatic sunset over an ancient Roman colosseum ruin, no text, vertical 9:16",
+    "vertical 9:16 portrait composition, ancient Roman marble bust against a dark background, dramatic lighting, no text, vertical 9:16"
+  ],
+  "video_prompts": [
+    "Camera zoom in, slow movement",
+    "Camera pan slowly across the ancient hall, subtle lighting change",
+    "Camera zoom in, flames flicker, slow movement",
+    "Camera slow tilt down, atmospheric dust particles floating",
+    "Camera zoom out, slow movement",
+    "Camera quick zoom in, subtle light flare"
+  ],
+  "article": {
+    "title": "Tributum",
+    "url": "https://en.wikipedia.org/wiki/Tributum",
+    "revid": 1376179260,
+    "license": "CC BY-SA 4.0"
+  },
+  "status": "confirmed"
+}

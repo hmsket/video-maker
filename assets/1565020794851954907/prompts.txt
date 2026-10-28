@@ -1,0 +1,37 @@
+【画像プロンプト（各シーン用・縦型 Shorts 用）】
+
+--- Scene 0 ---
+[画像]
+vertical 9:16 portrait composition, ancient Roman coin and map on a dark stone table, museum artifact style, no text, realistic, vertical 9:16
+[動き (Veo)]
+Camera zoom in, slow movement
+
+--- Scene 1 ---
+[画像]
+vertical 9:16 portrait composition, ancient Roman senate meeting hall with stone columns, historical painting style, no text, vertical 9:16
+[動き (Veo)]
+Camera pan slowly across the ancient hall, subtle lighting change
+
+--- Scene 2 ---
+[画像]
+vertical 9:16 portrait composition, ancient Roman treasury with gold coins and scrolls, warm candlelight, no text, vertical 9:16
+[動き (Veo)]
+Camera zoom in, flames flicker, slow movement
+
+--- Scene 3 ---
+[画像]
+vertical 9:16 portrait composition, ancient Roman legionary armor and shield resting on the ground, epic atmosphere, no text, vertical 9:16
+[動き (Veo)]
+Camera slow tilt down, atmospheric dust particles floating
+
+--- Scene 4 ---
+[画像]
+vertical 9:16 portrait composition, dramatic sunset over an ancient Roman colosseum ruin, no text, vertical 9:16
+[動き (Veo)]
+Camera zoom out, slow movement
+
+--- Scene 5 ---
+[画像]
+vertical 9:16 portrait composition, ancient Roman marble bust against a dark background, dramatic lighting, no text, vertical 9:16
+[動き (Veo)]
+Camera quick zoom in, subtle light flare
