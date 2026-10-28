@@ -228,11 +228,18 @@ function isMetaMessage(content) {
   return typeof content === 'string' && content.includes(META_MARKER);
 }
 
+// 【生成プロンプト】メッセージ（画像/動画プロンプトJSON）も台本ではない
+function isPromptsMessage(content) {
+  return typeof content === 'string'
+    && (content.includes('"video_maker_prompts"') || content.includes('video_maker_prompts'));
+}
+
 // /fact 用: スタンプの付いたメッセージ（ Bot メッセージも許容＝元台本が Bot 投稿のため）
 function pickScriptByStamp(messages) {
   for (const msg of messages) {
     const content = msg.content || "";
     if (isMetaMessage(content)) continue;
+    if (isPromptsMessage(content)) continue; // 🎨 プロンプト投稿は台本ではない
     const hasReaction = Array.isArray(msg.reactions) && msg.reactions.some(r => r.count > 0);
     if (!hasReaction) continue;
     const text = parseScriptText(content);
@@ -245,7 +252,9 @@ function pickScriptByStamp(messages) {
 function pickLatestUserScript(messages) {
   for (const msg of messages) {
     if (msg.author && msg.author.bot === true) continue;
-    const text = parseScriptText(msg.content || "");
+    const content = msg.content || "";
+    if (isPromptsMessage(content)) continue;
+    const text = parseScriptText(content);
     if (text.length > 0) return text;
   }
   return "";
@@ -259,6 +268,7 @@ function pickLatestScriptAny(messages) {
   for (const msg of messages) {  // Discord API は新しい順に返す
     const content = msg.content || "";
     if (isMetaMessage(content)) continue;
+    if (isPromptsMessage(content)) continue; // 🎨 プロンプト投稿は台本ではない
     if (STATUS_PREFIXES.some(p => content.trimStart().startsWith(p))) continue;
     if (!content.includes("```")) continue; // ステータス投稿などを除外
     const text = parseScriptText(content);

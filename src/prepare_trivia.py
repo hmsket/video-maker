@@ -75,18 +75,32 @@ def extract_prompt_lists(messages):
 
 
 def extract_edited_script(messages):
-    """メタデータメッセージを除いた中で、一番新しいコードブロック = 修正台本を取り出す。"""
-    for m in messages:  # Discord API は新しい順に返す
+    """一番新しい「台本」コードブロックを返す。
+
+    【生成プロンプト】メッセージ（画像/動画プロンプトJSON: type=video_maker_prompts）
+    は台本ではないため読み飛ばし、台本（scenes JSON または平文）を探しに行く。
+    戻り値: (script_text, prompts_meta)
+    """
+    prompts_meta = None
+    for m in messages:
         content = m.get("content", "")
         if META_MARKER in content:
-            continue  # パイプライン内部のメタデータは台本と区別する
-        match = re.search(r"```(?:\w+)?\s*\n?([\s\S]*?)```", content)
-        if match:
-            text = match.group(1).strip()
-            if text:
-                print("✅ Discord から修正済み台本を抽出しました。")
-                return text
-    return None
+            continue
+        for block in re.findall(r"```(?:\w+)?\s*\n?([\s\S]*?)```", content):
+            text = block.strip()
+            if not text:
+                continue
+            if text.startswith("{"):
+                try:
+                    payload = json.loads(text)
+                except json.JSONDecodeError:
+                    payload = None
+                if isinstance(payload, dict) and payload.get("type") == "video_maker_prompts":
+                    if prompts_meta is None:
+                        prompts_meta = payload
+                    continue  # プロンプトは台本ではない → 台本を探しに行く
+            return text, prompts_meta  # 台本（scenes JSON or 平文）
+    return "", prompts_meta
 
 
 def prepare_trivia():
@@ -109,7 +123,11 @@ def prepare_trivia():
 
     meta = extract_meta(messages) if messages else None
     pmeta = extract_prompt_lists(messages) if messages else None
-    script_text = extract_edited_script(messages) if messages else ""
+    script_text, prompts_msg_meta = extract_edited_script(messages) if messages else ("", None)
+    if prompts_msg_meta and not pmeta:
+        pmeta = prompts_msg_meta
+    if script_text:
+        print("✅ Discord から台本を抽出しました。")
 
     # 30秒シーン構成: 修正台本が {"theme":..., "scenes":[...]} の JSON コードブロックなら
     # scenes として取り込む（/fact の AI 修正もこの JSON の narration を書き換える形で行う）
