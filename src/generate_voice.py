@@ -77,6 +77,27 @@ def scenes_mode(data):
     return isinstance(data.get("scenes"), list) and len(data.get("scenes", [])) >= 3
 
 
+def build_caption_chunks(display_text, max_chars=SUB_LINE_MAX_CHARS):
+    """表示用全文を「、」「。」の区切りで数チャンクに分ける（音声に合わせて切り替わる字幕）。
+
+    チャンクは少なくとも max_chars/2 文字たまるまで連結して細切れを防ぐ。
+    """
+    text = (display_text or "").strip()
+    if not text:
+        return []
+    raw = [p for p in re.split(r"(?<=[、。])", text) if p and p.strip()]
+    chunks = []
+    buf = ""
+    for p in raw:
+        buf += p
+        if len(buf) >= max(6, max_chars // 2):
+            chunks.append(buf)
+            buf = ""
+    if buf.strip():
+        chunks.append(buf)
+    return chunks
+
+
 def generate_voice_and_srt(script_text, output_dir="output", units=None, skip_first_srt=False):
     """音声・SRT を生成する。
 
@@ -85,6 +106,7 @@ def generate_voice_and_srt(script_text, output_dir="output", units=None, skip_fi
     skip_first_srt=True で最初の要素の字幕を出力しない（タイトルカード被り防止）。
     """
     os.makedirs(output_dir, exist_ok=True)
+    scene_units = units is not None  # シーン構成モードかどうか（デフォルト化の前に判定）
     if units is None:
         sentences = split_sentences(script_text)
         units = [(s, s, 0.0) for s in sentences]
@@ -124,7 +146,27 @@ def generate_voice_and_srt(script_text, output_dir="output", units=None, skip_fi
         end_srt = format_srt_time(current_time_ms + duration_ms)
 
         if not (skip_first_srt and idx == 1):
-            srt_entries.append(f"{idx}\n{start_srt} --> {end_srt}\n{wrap_japanese(caption)}\n")
+            if not scene_units:
+                # 旧形式: 1文 = 1字幕
+                srt_entries.append(f"{len(srt_entries) + 1}\n{start_srt} --> {end_srt}\n{wrap_japanese(caption)}\n")
+            else:
+                # シーン構成: 表示全文をチャンクに分け、音声の進行に合わせて切り替え
+                chunks = build_caption_chunks(caption) or [caption]
+                weights = [max(1, len(c)) for c in chunks]
+                total_w = sum(weights)
+                # ---- 長さ比率で時間を配分（最終チャンクが残りを吸収） ----
+                leftover = duration_ms
+                offset = 0
+                for j, c in enumerate(chunks):
+                    if j == len(chunks) - 1:
+                        share = leftover
+                    else:
+                        share = int(duration_ms * weights[j] / total_w)
+                        leftover -= share
+                    cs = format_srt_time(current_time_ms + offset)
+                    ce = format_srt_time(current_time_ms + offset + share)
+                    srt_entries.append(f"{len(srt_entries) + 1}\n{cs} --> {ce}\n{wrap_japanese(c)}\n")
+                    offset += share
         
         combined_audio += audio_seg
         current_time_ms += duration_ms
@@ -138,7 +180,7 @@ def generate_voice_and_srt(script_text, output_dir="output", units=None, skip_fi
         f.write("\n".join(srt_entries))
         
     duration_sec = current_time_ms / 1000
-    label = "シーン" if units else "文"
+    label = "シーン" if scene_units else "文"
     n_items = len(items)
     print(f"✅ 音声・字幕生成完了 (計 {n_items} {label}, 全長: {duration_sec:.2f}秒)")
 
@@ -156,7 +198,11 @@ if __name__ == "__main__":
             data = json.load(f)
         if scenes_mode(data):
             units = [
-                (s.get("narration", ""), s.get("screen_text", ""), float(s.get("duration_sec") or 0))
+                (
+                    s.get("narration", ""),
+                    s.get("display_text") or s.get("screen_text", ""),  # 表示は漢字混じり全文を優先
+                    float(s.get("duration_sec") or 0),
+                )
                 for s in data["scenes"]
             ]
             # Scene 0 はタイトルカードが表示されるので字幕は省略

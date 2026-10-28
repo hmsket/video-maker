@@ -261,7 +261,7 @@ SCRIPT_PROMPT = """あなたはYouTube Shortsチャンネル「諸説ありch」
 【記事タイトル（テーマの材料）】{title}
 【原文】
 {text}
-次の JSON だけを返してください(narrative_ok が false のときは、scenes は空でよい):
+nextの JSON だけを返してください(narrative_ok が false のときは、scenes は空でよい):
 {
   "narrative_ok": true,
   "reason_if_not": "false のときだけ、作れない理由",
@@ -273,6 +273,7 @@ SCRIPT_PROMPT = """あなたはYouTube Shortsチャンネル「諸説ありch」
       "duration_sec": 2,
       "screen_text": "漢字ありの字幕テキスト",
       "narration": "ひらがなと「、」のみのTTS読み上げ用テキスト",
+      "display_text": "narration と同じ内容の全文（ひらがな開きせず、漢字を交えて読みやすい日本語で書く）",
       "image_prompt": "English image generation prompt",
       "video_motion_prompt": "English camera motion prompt for Veo"
     }
@@ -515,6 +516,7 @@ def build_messages(article, data):
                 "duration_sec": s.get("duration_sec"),
                 "screen_text": s.get("screen_text"),
                 "narration": s.get("narration"),
+                "display_text": s.get("display_text"),
             }
             for i, s in enumerate(scenes)
         ]
