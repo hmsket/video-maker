@@ -199,8 +199,8 @@ if __name__ == "__main__":
         if scenes_mode(data):
             units = [
                 (
-                    s.get("narration", ""),
-                    s.get("display_text") or s.get("screen_text", ""),  # 表示は漢字混じり全文を優先
+                    s.get("display_text") or s.get("narration", ""),  # TTSは漢字混じり本文で読ませる（誤読ひらがな回避）
+                    s.get("display_text") or s.get("screen_text", ""),  # 字幕も同じ全文
                     float(s.get("duration_sec") or 0),
                 )
                 for s in data["scenes"]
