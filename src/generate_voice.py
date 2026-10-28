@@ -77,11 +77,12 @@ def scenes_mode(data):
     return isinstance(data.get("scenes"), list) and len(data.get("scenes", [])) >= 3
 
 
-def generate_voice_and_srt(script_text, output_dir="output", units=None):
+def generate_voice_and_srt(script_text, output_dir="output", units=None, skip_first_srt=False):
     """音声・SRT を生成する。
 
     units が指定された場合（30秒シーン構成モード）は
     (ナレーション, 画面字幕テキスト, 台本上の秒数) のリストで1シーン1音声にする。
+    skip_first_srt=True で最初の要素の字幕を出力しない（タイトルカード被り防止）。
     """
     os.makedirs(output_dir, exist_ok=True)
     if units is None:
@@ -122,7 +123,8 @@ def generate_voice_and_srt(script_text, output_dir="output", units=None):
         start_srt = format_srt_time(current_time_ms)
         end_srt = format_srt_time(current_time_ms + duration_ms)
 
-        srt_entries.append(f"{idx}\n{start_srt} --> {end_srt}\n{wrap_japanese(caption)}\n")
+        if not (skip_first_srt and idx == 1):
+            srt_entries.append(f"{idx}\n{start_srt} --> {end_srt}\n{wrap_japanese(caption)}\n")
         
         combined_audio += audio_seg
         current_time_ms += duration_ms
@@ -157,7 +159,8 @@ if __name__ == "__main__":
                 (s.get("narration", ""), s.get("screen_text", ""), float(s.get("duration_sec") or 0))
                 for s in data["scenes"]
             ]
-            generate_voice_and_srt(data.get("script_text", ""), units=units)
+            # Scene 0 はタイトルカードが表示されるので字幕は省略
+            generate_voice_and_srt(data.get("script_text", ""), units=units, skip_first_srt=True)
         else:
             generate_voice_and_srt(data["script_text"])
     else:

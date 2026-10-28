@@ -192,6 +192,47 @@ def _subtitle_style():
     )
 
 
+def render_title_card(src, kind, title_file, out_path):
+    """1枚目の素材（画像/クリップ）から「暗幕＋タイトル文字」の静止画カードを作る。"""
+    vf = (
+        f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,"
+        f"crop={WIDTH}:{HEIGHT},"
+        f"boxblur=luma_radius=24:luma_power=2,"
+        f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{TITLE_BG_DARK}:t=fill,"
+        f"drawtext=fontfile={TITLE_FONT_FILE}:textfile={title_file}"
+        f":fontsize={TITLE_FONT_SIZE}:fontcolor=white"
+        f":line_spacing={int(TITLE_FONT_SIZE * 0.35)}"
+        f":shadowcolor=black@0.7:shadowx=2:shadowy=2"
+        f":x=(w-text_w)/2:y=(h-text_h)/2"
+    )
+    cmd = ["ffmpeg", "-y"]
+    if kind == "clip":
+        cmd += ["-ss", "1"]  # クリップなら1秒目のフレームを使う
+    cmd += ["-i", src, "-frames:v", "1", "-vf", vf, out_path]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _remap_assets_for_scenes(assets, n_slots, title_card_path):
+    """シーン数に合わせて素材を割り当て直す。
+
+    - slot0（タイトルシーン）は 1枚目素材から自動生成した暗幕タイトルカード
+    - それ以外は後ろのシーンから逆順に1枚ずつ割り当て、素材が足りなければ1枚目を再利用
+      （例: 素材4枚・シーン6つ → [タイトル, a1, a1, a2, a3, a4]）
+    """
+    k = len(assets)
+    if k == 0:
+        return [("image", title_card_path)]
+    if k >= n_slots:
+        return assets[:n_slots]
+    slots = [None] * n_slots
+    idx = k - 1
+    for i in range(n_slots - 1, 0, -1):
+        slots[i] = assets[idx]
+        idx = idx - 1 if idx > 0 else 0  # 素材を使い切ったら1枚目を再利用
+    slots[0] = ("image", title_card_path)
+    return slots
+
+
 def build_video(output_dir="output"):
     audio_path = os.path.join(output_dir, "full_voice.wav")
     srt_path = os.path.join(output_dir, "subtitles.srt")
@@ -221,18 +262,48 @@ def build_video(output_dir="output"):
     for i, (k, p) in enumerate(assets, start=1):
         print(f"   Scene {i}: [{k}] {os.path.basename(p)}")
 
-    # ── 音声長から各シーンの表示時間を算出 ──
+    # ── 音声の実長 ──
     audio = AudioSegment.from_file(audio_path)
     total_sec = len(audio) / 1000.0
-    scene_duration = total_sec / n  # 検出した素材数で均等割り（旧形式のフォールバック）
 
-    # 30秒シーン構成: 台本の scenes[].duration_sec を優先（音声の実長に比率スケールして同期保証）
+    # ── 30秒シーン構成: 台本の scenes を取得 ──
     scenes_list = []
     try:
         with open(os.path.join(output_dir, "trivia_result.json"), encoding="utf-8") as f:
             scenes_list = json.load(f).get("scenes") or []
     except Exception:
         scenes_list = []
+    is_scene_mode = bool(scenes_list)
+
+    # ── タイトルの準備（シーン構成では Scene 0 の screen_text をタイトルに使う） ──
+    title_file = os.path.join(output_dir, "title.txt").replace("\\", "/").replace(":", "\\:")
+    title = load_title(output_dir)
+    if is_scene_mode and scenes_list and scenes_list[0].get("screen_text"):
+        title = scenes_list[0]["screen_text"]
+    title_text = title or "歴史雑学ショート"
+    with open(os.path.join(output_dir, "title.txt"), "w", encoding="utf-8") as f:
+        f.write(wrap_japanese(title_text, TITLE_LINE_MAX_CHARS))
+
+    # ── シーン構成モード: 素材の割当てをシーン数に合わせ直す ──
+    if is_scene_mode:
+        n_slots = len(scenes_list)
+        title_card_path = os.path.join(output_dir, "title_card.png")
+        try:
+            render_title_card(assets[0][1], assets[0][0], title_file, title_card_path)
+        except Exception as e:
+            print(f"⚠️ タイトルカード生成に失敗（1枚目素材をそのまま使います）: {e}")
+            title_card_path = assets[0][1]
+        assets = _remap_assets_for_scenes(assets, n_slots, title_card_path)
+        kinds = [k for k, _ in assets]
+        scene_files = [p for _, p in assets]
+        n = len(scene_files)
+        n_clip = sum(1 for k in kinds if k == "clip")
+        n_image = n - n_clip
+        print(f"⏱️ シーン構成モード: 素材を {n_slots} シーンに割り当てました")
+    for i, (k, p) in enumerate(assets, start=1):
+        print(f"   Scene {i - 1}: [{k}] {os.path.basename(p)}")
+
+    scene_duration = total_sec / n  # 均等割り（旧形式フォールバック用）
     scripted = []
     for s in scenes_list:
         try:
@@ -242,26 +313,16 @@ def build_video(output_dir="output"):
     if scripted and sum(1 for x in scripted if x > 0) == n:
         scale = total_sec / sum(scripted)
         durs = [d * scale if d > 0 else scene_duration for d in scripted]
-        print(f"⏱️ シーン構成モード: 台本の尺を優先します（合計 {sum(durs):.2f} 秒 = 音声長）")
+        print(f"⏱️ シーン構成の尺を適用（合計 {sum(durs):.2f} 秒 = 音声長）")
     else:
         durs = [scene_duration] * n
-        if scenes_list and len(scenes_list) != n:
-            print(f"⚠️ scenes の数({len(scenes_list)})と素材数({n})が異なるため、均等割りで続行します")
-    is_scene_mode = bool(scenes_list)
     scene_duration = durs[0]
 
     # Subtitles フィルタ用のパス指定（コロンなどのパス特殊文字対策）
     clean_srt_path = srt_path.replace("\\", "/").replace(":", "\\:")
 
-    # ── タイトル（イントロ）の準備 ──
-    title = load_title(output_dir)
-    # シーン構成モードでは Scene 0 自体がタイトルシーンなので、ぼかしイントロは使わない
+    # ぼかしイントロは旧形式のみ（シーン構成では slot0 がタイトルカード）
     use_intro = bool(title) and not is_scene_mode and scene_duration > TITLE_INTRO_SEC + 0.5
-    title_text = title or "歴史雑学ショート"
-    title_file = os.path.join(output_dir, "title.txt").replace("\\", "/").replace(":", "\\:")
-    # タイトルは日本語として自然な位置で折り返してから使う（CapCut風の2行センタリング）
-    with open(os.path.join(output_dir, "title.txt"), "w", encoding="utf-8") as f:
-        f.write(wrap_japanese(title_text, TITLE_LINE_MAX_CHARS))
 
     # ── FFmpeg 入力コマンド構築 ──
     cmd = ["ffmpeg", "-y"]
