@@ -1,75 +1,50 @@
 1
-00:00:00,000 --> 00:01:44,110
-{"type":"video_m
-aker_prompts","i
-mage_prompts":["
-vertical 9:16 po
-rtrait compositi
-on, ancient Roma
-n coin and map o
-n a dark stone t
-able, museum art
-ifact style, no 
-text, realistic,
-vertical 9:16","
-vertical 9:16 po
-rtrait compositi
-on, ancient Roma
-n senate meeting
-hall with stone 
-columns, histori
-cal painting sty
-le, no text, ver
-tical 9:16","ver
-tical 9:16 portr
-ait composition,
-ancient Roman tr
-easury with gold
-coins and scroll
-s, warm candleli
-ght, no text, ve
-rtical 9:16","ve
-rtical 9:16 port
-rait composition
-, ancient Roman 
-legionary armor 
-and shield resti
-ng on the ground
-, epic atmospher
-e, no text, vert
-ical 9:16","vert
-ical 9:16 portra
-it composition, 
-dramatic sunset 
-over an ancient 
-Roman colosseum 
-ruin, no text, v
-ertical 9:16","v
-ertical 9:16 por
-trait compositio
-n, ancient Roman
-marble bust agai
-nst a dark backg
-round, dramatic 
-lighting, no tex
-t, vertical 9:16
-"],"video_motion
-_prompts":["Came
-ra zoom in, slow
-movement","Camer
-a pan slowly acr
-oss the ancient 
-hall, subtle lig
-hting change","C
-amera zoom in, f
-lames flicker, s
-low movement","C
-amera slow tilt 
-down, atmospheri
-c dust particles
-floating","Camer
-a zoom out, slow
-movement","Camer
-a quick zoom in,
-subtle light fla
-re"]}
+00:00:01,732 --> 00:00:03,826
+戦争の費用を賄うため、
+
+2
+00:00:03,826 --> 00:00:06,110
+資産に応じてかけられた、
+
+3
+00:00:06,110 --> 00:00:08,394
+税金のトリブツムですが、
+
+4
+00:00:08,394 --> 00:00:09,158
+本当は、
+
+5
+00:00:09,158 --> 00:00:10,571
+税金ではなくて、
+
+6
+00:00:10,571 --> 00:00:13,574
+あとで元老院や公金から
+返金される、
+
+7
+00:00:13,574 --> 00:00:16,754
+強制借り入れ金の意味があったので
+す、
+
+8
+00:00:16,754 --> 00:00:19,017
+勝利したときの戦利品で、
+
+9
+00:00:19,017 --> 00:00:21,091
+元を返す予定でしたが、
+
+10
+00:00:21,091 --> 00:00:22,035
+実際には、
+
+11
+00:00:22,035 --> 00:00:26,496
+費用が高すぎてお金が戻らないこと
+も多くありました、
+
+12
+00:00:26,496 --> 00:00:27,811
+諸説あり！
